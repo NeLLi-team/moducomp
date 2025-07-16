@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-moducomp: Metabolic Module Completeness and Complementarity Analysis Tool.
+moducomp: Metabolic module completeness of genomes and metabolic complementarity in microbiomes
 
 This module provides a comprehensive bioinformatics pipeline for analyzing metabolic
 module completeness in microbial genomes and identifying complementarity patterns
