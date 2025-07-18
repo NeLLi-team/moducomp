@@ -1,11 +1,11 @@
 # `moducomp`: metabolic module completeness of genomes and metabolic complementarity in microbiomes
 
-`moducomp` is a bioinformatics pipeline designed to identify and analyze metabolic module completeness and complementarity in microbial communities. It processes genomic data (protein sequences in FAA format) to map KEGG Orthology (KO) terms to KEGG modules, calculates module completeness for individual genomes and combinations of genomes within a microbiomes, specifically reports potential complementary relationships where a metabolic module is 100% complete in a combination of N genomes but not in any individual member or smaller subset.
+`moducomp` is a bioinformatics pipeline designed to identify and analyze metabolic module completeness and complementarity in microbial communities. It processes genomic data (protein sequences in FAA format) to map KEGG Orthology (KO) terms to KEGG modules, calculates module completeness for individual genomes and combinations of genomes within a microbiome, specifically reports potential complementary relationships where a metabolic module is 100% complete in a combination of N genomes but not in any individual member or smaller subset.
 
 ## Features
 
 - Annotation of protein sequences using [`eggNOG-mapper`](https://github.com/eggnogdb/eggnog-mapper) to obtain KO terms.
-- Mapping of KOs to KEGG metabolic modules based on [`kegg-pathways-completeness-tool`](https://github.com/EBI-Metagenomics/kegg-pathways-completeness-tool]) to obtain metabolic module completeness.
+- Mapping of KOs to KEGG metabolic modules based on [`kegg-pathways-completeness-tool`](https://github.com/EBI-Metagenomics/kegg-pathways-completeness-tool) to obtain metabolic module completeness.
 - **Parallel processing support** for faster KPCT (KEGG Pathways Completeness Tool) analysis with automatic chunking and checkpointing.
 - Reporting of module completeness for individual genomes.
 - Calculation of module completeness for N-member genome combinations.
