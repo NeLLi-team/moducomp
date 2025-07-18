@@ -172,5 +172,4 @@ When using the `--ncpus` parameter with a value greater than 1, `moducomp` autom
 ```
 
 ## Citation
-If you use `moducomp` in your research, please cite:
-Villada, JC. & Schulz, F. (2025). `moducomp`: A computational tool for metabolic module completeness of genomes and metabolic complementarity in microbiomes.
+Villada, JC. & Schulz, F. (2025). `moducomp`: A computational tool for metabolic module completeness of genomes and metabolic complementarity in microbiomes. moducomp (v0.5.1) Zenodo. https://doi.org/10.5281/zenodo.16116092
