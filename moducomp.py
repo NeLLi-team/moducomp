@@ -41,10 +41,27 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Union
 import pandas as pd
 import typer
 
+def conditional_output(message: str, color: str = "white", verbose: bool = True) -> None:
+    """
+    Print message to terminal only if verbose mode is enabled.
+
+    Parameters
+    ----------
+    message : str
+        Message to display
+    color : str, optional
+        Color for the message, by default "white"
+    verbose : bool, optional
+        Whether to display the message, by default True
+    """
+    if verbose:
+        typer.secho(message, fg=color)
+
 def run_subprocess_with_logging(
     cmd: List[str],
     logger: Optional[logging.Logger] = None,
-    description: str = "Running command"
+    description: str = "Running command",
+    verbose: bool = True
 ) -> Tuple[int, str, str]:
     """
     Run a subprocess command with proper stdout/stderr streaming to both console and log file.
@@ -66,9 +83,9 @@ def run_subprocess_with_logging(
     if logger:
         logger.info(f"{description}: {' '.join(cmd)}")
 
-
-    typer.secho(f"🔧 {description}", fg="yellow")
-    typer.secho(f"   Command: {' '.join(cmd)}", fg="blue")
+    # Only show detailed command info in verbose mode
+    conditional_output(f"🔧 {description}", "yellow", verbose)
+    conditional_output(f"   Command: {' '.join(cmd)}", "blue", verbose)
 
     try:
 
@@ -97,7 +114,9 @@ def run_subprocess_with_logging(
                     stdout_line = stdout_line.rstrip('\n\r')
                     stdout_lines.append(stdout_line)
 
-                    print(f"[STDOUT] {stdout_line}")
+                    # Only show subprocess output in verbose mode
+                    if verbose:
+                        print(f"[STDOUT] {stdout_line}")
 
                     if logger:
                         logger.info(f"[STDOUT] {stdout_line}")
@@ -109,7 +128,9 @@ def run_subprocess_with_logging(
                     stderr_line = stderr_line.rstrip('\n\r')
                     stderr_lines.append(stderr_line)
 
-                    print(f"[STDERR] {stderr_line}", file=sys.stderr)
+                    # Only show subprocess output in verbose mode
+                    if verbose:
+                        print(f"[STDERR] {stderr_line}", file=sys.stderr)
 
                     if logger:
                         logger.warning(f"[STDERR] {stderr_line}")
@@ -121,7 +142,9 @@ def run_subprocess_with_logging(
             for line in remaining_stdout.strip().split('\n'):
                 if line:
                     stdout_lines.append(line)
-                    print(f"[STDOUT] {line}")
+                    # Only show subprocess output in verbose mode
+                    if verbose:
+                        print(f"[STDOUT] {line}")
                     if logger:
                         logger.info(f"[STDOUT] {line}")
 
@@ -129,7 +152,9 @@ def run_subprocess_with_logging(
             for line in remaining_stderr.strip().split('\n'):
                 if line:
                     stderr_lines.append(line)
-                    print(f"[STDERR] {line}", file=sys.stderr)
+                    # Only show subprocess output in verbose mode
+                    if verbose:
+                        print(f"[STDERR] {line}", file=sys.stderr)
                     if logger:
                         logger.warning(f"[STDERR] {line}")
 
@@ -389,7 +414,7 @@ def setup_logging(savedir: str) -> logging.Logger:
     logger.info(f"Log file created at: {log_file}")
     return logger
 
-def greetings():
+def greetings(verbose: bool = True):
     """
     Print welcome message for the ModuComp application.
 
@@ -397,7 +422,7 @@ def greetings():
     when the application starts.
     """
     my_name = "\n📊 ModuComp"
-    typer.secho(my_name, fg="green", bold=True)
+    conditional_output(my_name, "green", verbose)
 
 
 def get_path_to_each_genome(genomedir: str):
@@ -417,7 +442,7 @@ def get_path_to_each_genome(genomedir: str):
     return glob.glob(pathname=f"{genomedir}/*.faa")
 
 
-def how_many_genomes(genomedir: str):
+def how_many_genomes(genomedir: str, verbose: bool = True):
     """
     Count and display the number of FAA files in the genome directory.
 
@@ -429,18 +454,19 @@ def how_many_genomes(genomedir: str):
     ----------
     genomedir : str
         Directory containing genome files in FAA format
+    verbose : bool
+        Whether to display detailed output
     """
     n_files = len(get_path_to_each_genome(genomedir))
     if n_files > 0:
-        typer.secho(f"✅ [OK] {n_files} faa files were found in '{genomedir}'\n",
-                    fg="white")
+        conditional_output(f"✅ [OK] {n_files} faa files were found in '{genomedir}'\n", "white", verbose)
     else:
-        typer.secho(f"❌ [ERROR] No FAA files were found in '{genomedir}'\n",
-                    fg="red")
+        # Always show errors regardless of verbose setting
+        typer.secho(f"❌ [ERROR] No FAA files were found in '{genomedir}'\n", fg="red")
         exit()
 
 
-def create_output_dir(savedir: str):
+def create_output_dir(savedir: str, verbose: bool = True):
     """
     Create the output directory if it doesn't exist.
 
@@ -448,13 +474,15 @@ def create_output_dir(savedir: str):
     ----------
     savedir : str
         Path to the output directory to create
+    verbose : bool
+        Whether to display detailed output
     """
-    typer.secho("\n📊 Creating output directory", fg="green")
+    conditional_output("\n📊 Creating output directory", "green", verbose)
     if os.path.exists(savedir):
-        typer.secho(f"✅ [OK] Output directory already exists at: {savedir}\n", fg="white")
+        conditional_output(f"✅ [OK] Output directory already exists at: {savedir}\n", "white", verbose)
     else:
         os.makedirs(savedir, exist_ok=True)
-        typer.secho(f"✅ [OK] Output directory created at: {savedir}\n", fg="white")
+        conditional_output(f"✅ [OK] Output directory created at: {savedir}\n", "white", verbose)
 
 
 def get_tmp_dir(savedir:str) -> str:
@@ -475,7 +503,7 @@ def get_tmp_dir(savedir:str) -> str:
     return(tmp_dir_path)
 
 
-def create_tmp_dir(savedir: str):
+def create_tmp_dir(savedir: str, verbose: bool = True):
     """
     Create the temporary directory if it doesn't exist.
 
@@ -483,17 +511,19 @@ def create_tmp_dir(savedir: str):
     ----------
     savedir : str
         Base output directory where temporary directory will be created
+    verbose : bool
+        Whether to display detailed output
     """
-    typer.secho("\n📊 Creating tmp dir", fg="green")
+    conditional_output("\n📊 Creating tmp dir", "green", verbose)
     tmp_dir_path = get_tmp_dir(savedir)
     if (os.path.exists(tmp_dir_path)):
-        typer.secho(f"✅ [OK] Tmp directory already exists at: {tmp_dir_path}\n", fg="white")
+        conditional_output(f"✅ [OK] Tmp directory already exists at: {tmp_dir_path}\n", "white", verbose)
     else:
         os.mkdir(tmp_dir_path)
-        typer.secho(f"✅ [OK] Tmp directory created at: {tmp_dir_path}\n", fg="white")
+        conditional_output(f"✅ [OK] Tmp directory created at: {tmp_dir_path}\n", "white", verbose)
 
 
-def adapt_fasta_headers(genomedir: str, savedir: str) -> None:
+def adapt_fasta_headers(genomedir: str, savedir: str, verbose: bool = True) -> None:
     """
     Modify FASTA headers to follow a consistent naming convention.
 
@@ -508,16 +538,18 @@ def adapt_fasta_headers(genomedir: str, savedir: str) -> None:
         Directory containing original genome files in FAA format
     savedir : str
         Output directory where modified files will be saved
+    verbose : bool
+        Whether to display detailed output
     """
-    typer.secho("\n📊 Modifying fasta headers", fg="green")
+    conditional_output("\n📊 Modifying fasta headers", "green", verbose)
     path_to_each_genome = get_path_to_each_genome(genomedir)
     output_dir = f"{get_tmp_dir(savedir)}/faa"
     if os.path.exists(output_dir):
-        typer.secho(f"✅ [OK] Fasta headers already modified at: {output_dir}\n", fg="white")
+        conditional_output(f"✅ [OK] Fasta headers already modified at: {output_dir}\n", "white", verbose)
         return
 
     os.mkdir(output_dir)
-    typer.secho("Processing fasta files and modifying headers...", fg="yellow")
+    conditional_output("Processing fasta files and modifying headers...", "yellow", verbose)
     for each_file in path_to_each_genome:
         with open(each_file) as infile:
             with open(f"{output_dir}/{os.path.basename(each_file)}", "w") as outfile:
@@ -529,10 +561,10 @@ def adapt_fasta_headers(genomedir: str, savedir: str) -> None:
                         i+=1
                     else:
                         outfile.write(line)
-    typer.secho(f"✅ [OK] Fasta headers modified at: {output_dir}\n", fg="white")
+    conditional_output(f"✅ [OK] Fasta headers modified at: {output_dir}\n", "white", verbose)
 
 
-def copy_faa_to_tmp(genomedir: str, savedir: str) -> None:
+def copy_faa_to_tmp(genomedir: str, savedir: str, verbose: bool = True) -> None:
     """
     Copy FAA files from the genome directory to the temporary directory.
 
@@ -546,22 +578,24 @@ def copy_faa_to_tmp(genomedir: str, savedir: str) -> None:
         Source directory containing genome files in FAA format
     savedir : str
         Output directory where files will be copied to tmp/faa subdirectory
+    verbose : bool
+        Whether to display detailed output
     """
-    typer.secho("\n📊 Copying faa files to tmp dir", fg="green")
+    conditional_output("\n📊 Copying faa files to tmp dir", "green", verbose)
     path_to_each_genome = get_path_to_each_genome(genomedir)
     output_dir = f"{get_tmp_dir(savedir)}/faa"
     if os.path.exists(output_dir):
-        typer.secho(f"✅ [OK] Fasta files already exist at: {output_dir}\n", fg="white")
+        conditional_output(f"✅ [OK] Fasta files already exist at: {output_dir}\n", "white", verbose)
         return
 
     os.mkdir(output_dir)
-    typer.secho("Copying genome files to temporary directory...", fg="yellow")
+    conditional_output("Copying genome files to temporary directory...", "yellow", verbose)
     for each_file in path_to_each_genome:
         shutil.copy(each_file, output_dir)
-    typer.secho(f"✅ [OK] Fasta files copied to: {output_dir}\n", fg="white")
+    conditional_output(f"✅ [OK] Fasta files copied to: {output_dir}\n", "white", verbose)
 
 
-def merge_genomes(savedir: str, logger: Optional[logging.Logger] = None) -> bool:
+def merge_genomes(savedir: str, logger: Optional[logging.Logger] = None, verbose: bool = True) -> bool:
     """
     Merge individual genome FAA files into a single file.
 
@@ -571,19 +605,21 @@ def merge_genomes(savedir: str, logger: Optional[logging.Logger] = None) -> bool
         Directory where outputs will be saved
     logger : Optional[logging.Logger], optional
         Logger instance for logging progress
+    verbose : bool
+        Whether to display detailed output
 
     Returns
     -------
     bool
         True if the merged file was created or already exists, False otherwise
     """
-    typer.secho("\n📊 Merging genomes", fg="green")
+    conditional_output("\n📊 Merging genomes", "green", verbose)
     genome_file_paths = glob.glob(f"{get_tmp_dir(savedir)}/faa/*.faa")
     output_file = f"{get_tmp_dir(savedir)}/merged_genomes.faa"
 
 
     if os.path.exists(output_file):
-        typer.secho(f"✅ [OK] Merged genomes file already exists at: {output_file}\n", fg="white")
+        conditional_output(f"✅ [OK] Merged genomes file already exists at: {output_file}\n", "white", verbose)
         if logger:
             logger.info(f"Using existing merged genomes file: {output_file}")
         return True
@@ -591,31 +627,33 @@ def merge_genomes(savedir: str, logger: Optional[logging.Logger] = None) -> bool
 
     if not genome_file_paths:
         error_msg = f"No FAA files found in {get_tmp_dir(savedir)}/faa/"
+        # Always show errors regardless of verbose setting
         typer.secho(f"❌ [ERROR] {error_msg}", fg="red")
         if logger:
             logger.error(error_msg)
         return False
 
-    typer.secho("Merging individual genome files...", fg="yellow")
+    conditional_output("Merging individual genome files...", "yellow", verbose)
     try:
         with open(output_file, "w") as outfile:
             for each_file in genome_file_paths:
                 with open(each_file) as infile:
                     for line in infile:
                         outfile.write(line)
-        typer.secho(f"✅ [OK] Fasta files merged at: {output_file}\n", fg="white")
+        conditional_output(f"✅ [OK] Fasta files merged at: {output_file}\n", "white", verbose)
         if logger:
             logger.info(f"Successfully created merged genome file: {output_file}")
         return True
     except Exception as e:
         error_msg = f"Error merging genome files: {str(e)}"
+        # Always show errors regardless of verbose setting
         typer.secho(f"❌ [ERROR] {error_msg}", fg="red")
         if logger:
             logger.error(error_msg)
         return False
 
 
-def run_emapper(savedir: str, ncpus: int, lowmem: bool = False, logger: Optional[logging.Logger] = None) -> bool:
+def run_emapper(savedir: str, ncpus: int, lowmem: bool = False, logger: Optional[logging.Logger] = None, verbose: bool = True) -> bool:
     """
     Run eggNOG-mapper on the merged genomes file.
 
@@ -1504,6 +1542,8 @@ def create_module_completeness_matrix(savedir: str, kpct_outprefix: str, logger:
     output_file = os.path.join(savedir, "module_completeness.tsv")
     kpct_output_file = os.path.join(savedir, f"{kpct_outprefix}_contigs.with_weights.tsv")
 
+    # Try to find the KPCT input file to get the complete list of genomes
+    kpct_input_file = os.path.join(savedir, "ko_file_for_kpct.txt")
 
     if not os.path.exists(kpct_output_file):
         alternatives = [
@@ -1524,13 +1564,24 @@ def create_module_completeness_matrix(savedir: str, kpct_outprefix: str, logger:
         return
 
     try:
+        # Get the complete list of genomes from the original KPCT input
+        all_genomes = set()
+        if os.path.exists(kpct_input_file):
+            with open(kpct_input_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        genome_id = line.split('\t')[0]
+                        all_genomes.add(genome_id)
+            if logger:
+                logger.info(f"Found {len(all_genomes)} total genomes in KPCT input file")
 
         if logger:
             logger.info(f"Reading KPCT output from: {kpct_output_file}")
 
         kpct_df = pd.read_csv(kpct_output_file, sep='\t')
 
-
+        # Identify contig/genome column
         contig_column = None
         possible_contig_columns = ['contig', 'Contig', 'genome', 'Genome', 'taxon_oid']
 
@@ -1540,13 +1591,12 @@ def create_module_completeness_matrix(savedir: str, kpct_outprefix: str, logger:
                 break
 
         if not contig_column:
-
+            # Fall back to first column
             contig_column = kpct_df.columns[0]
             if logger:
                 logger.warning(f"No standard contig/genome column found. Using first column: '{contig_column}'")
 
-
-
+        # Identify module columns and completeness column
         module_cols = []
         completeness_col = None
 
@@ -1556,13 +1606,15 @@ def create_module_completeness_matrix(savedir: str, kpct_outprefix: str, logger:
             elif col.lower() == 'completeness':
                 completeness_col = col
 
-
+        # Handle row-based format (pivot if needed)
         if not module_cols and 'module_accession' in kpct_df.columns and completeness_col:
-
             if logger:
                 logger.info("Detected row-based format. Pivoting data to create module matrix.")
 
+            # Get all unique modules before pivoting
+            all_modules = sorted(kpct_df['module_accession'].unique())
 
+            # Pivot the data
             pivot_df = kpct_df.pivot_table(
                 index=contig_column,
                 columns='module_accession',
@@ -1570,9 +1622,36 @@ def create_module_completeness_matrix(savedir: str, kpct_outprefix: str, logger:
                 fill_value=0
             )
 
-
+            # Reset index to make contig_column a regular column
             pivot_df = pivot_df.reset_index()
 
+            # If we have a list of all genomes, ensure they're all included
+            if all_genomes:
+                # Get genomes that appear in the KPCT output
+                genomes_in_output = set(pivot_df[contig_column].astype(str))
+
+                # Find missing single genomes (not combinations)
+                missing_single_genomes = set()
+                for genome in all_genomes:
+                    if genome not in genomes_in_output and '__' not in genome:
+                        missing_single_genomes.add(genome)
+
+                if missing_single_genomes:
+                    if logger:
+                        logger.info(f"Adding {len(missing_single_genomes)} missing genomes with zero completeness")
+
+                    # Create rows for missing genomes with zero completeness
+                    missing_rows = []
+                    for genome in missing_single_genomes:
+                        row = {contig_column: genome}
+                        for module in all_modules:
+                            row[module] = 0
+                        missing_rows.append(row)
+
+                    # Add missing rows to the pivot dataframe
+                    if missing_rows:
+                        missing_df = pd.DataFrame(missing_rows)
+                        pivot_df = pd.concat([pivot_df, missing_df], ignore_index=True)
 
             kpct_df = pivot_df
             module_cols = [col for col in kpct_df.columns if col != contig_column]
@@ -1584,41 +1663,46 @@ def create_module_completeness_matrix(savedir: str, kpct_outprefix: str, logger:
             typer.secho(f"❌ [ERROR] {error_msg}", fg="red")
             return
 
-
+        # Build the result data
         result_data = []
 
         for _, row in kpct_df.iterrows():
             taxon_oid = row[contig_column]
 
-
+            # Determine number of members
             n_members = 1
             if "__" in str(taxon_oid):
                 n_members = str(taxon_oid).count("__") + 1
 
-
+            # Create result row
             result_row = {'n_members': n_members, 'taxon_oid': taxon_oid}
 
-
+            # Add module completeness values
             for module in module_cols:
                 result_row[module] = row[module]
 
             result_data.append(result_row)
 
-
+        # Create final dataframe
         result_df = pd.DataFrame(result_data)
 
-
+        # Sort columns: n_members, taxon_oid, then modules alphabetically
         module_cols = sorted([col for col in result_df.columns if col not in ['n_members', 'taxon_oid']])
         result_df = result_df[['n_members', 'taxon_oid'] + module_cols]
 
-
+        # Sort by n_members and taxon_oid
         result_df = result_df.sort_values(by=['n_members', 'taxon_oid'])
 
-
+        # Save the matrix
         result_df.to_csv(output_file, sep='\t', index=False)
 
         if logger:
+            single_genomes = len(result_df[result_df['n_members'] == 1])
+            total_genomes = len(result_df)
             logger.info(f"Module completeness matrix saved to: {output_file}")
+            logger.info(f"Matrix contains {single_genomes} single genomes out of {total_genomes} total entries")
+            if all_genomes:
+                logger.info(f"Expected {len(all_genomes)} single genomes from KPCT input")
         typer.secho(f"✅ [OK] Module completeness matrix saved to: {output_file}", fg="white")
 
     except Exception as e:
@@ -1913,23 +1997,30 @@ def chunk_kpct_input_file(kpct_input_file: str, savedir: str, n_chunks: int, log
             typer.secho(f"❌ [ERROR] {error_msg}", fg="red")
             return []
 
+        # Calculate lines per chunk using ceiling division to ensure we create exactly n_chunks
+        # when there are enough lines, or fewer chunks only if we have fewer lines than chunks
+        if len(lines) < n_chunks:
+            # If we have fewer lines than requested chunks, create one chunk per line
+            n_chunks = len(lines)
+            if logger:
+                logger.warning(f"Only {len(lines)} lines available, reducing chunks to {n_chunks}")
 
-        lines_per_chunk = max(1, len(lines) // n_chunks)
-        if len(lines) % n_chunks != 0:
-            lines_per_chunk += 1
+        lines_per_chunk = len(lines) // n_chunks
+        remainder = len(lines) % n_chunks
 
         chunk_files = []
 
-
+        # Create chunks with more even distribution
+        current_idx = 0
         for i in range(n_chunks):
-            start_idx = i * lines_per_chunk
-            end_idx = min((i + 1) * lines_per_chunk, len(lines))
+            # Some chunks get an extra line if there's a remainder
+            chunk_size = lines_per_chunk + (1 if i < remainder else 0)
 
-
-            if start_idx >= len(lines):
+            # Skip if we've already processed all lines
+            if current_idx >= len(lines):
                 break
 
-            chunk_lines = lines[start_idx:end_idx]
+            chunk_lines = lines[current_idx:current_idx + chunk_size]
 
             if chunk_lines:
                 chunk_file = os.path.join(chunks_dir, f"chunk_{i:03d}.txt")
@@ -1937,8 +2028,19 @@ def chunk_kpct_input_file(kpct_input_file: str, savedir: str, n_chunks: int, log
                     f.writelines(chunk_lines)
                 chunk_files.append(chunk_file)
 
+            current_idx += chunk_size
+
         if logger:
-            logger.info(f"Created {len(chunk_files)} chunks with {lines_per_chunk} lines each (last chunk may have fewer)")
+            # Calculate actual distribution for better logging
+            total_lines = len(lines)
+            chunks_created = len(chunk_files)
+            base_lines = lines_per_chunk
+            extra_lines_chunks = remainder
+
+            if extra_lines_chunks > 0:
+                logger.info(f"Created {chunks_created} chunks: {extra_lines_chunks} chunks with {base_lines + 1} lines, {chunks_created - extra_lines_chunks} chunks with {base_lines} lines (total: {total_lines} KPCT input lines)")
+            else:
+                logger.info(f"Created {chunks_created} chunks with {base_lines} lines each (total: {total_lines} KPCT input lines)")
 
         return chunk_files
 
@@ -2149,9 +2251,9 @@ def run_kpct_parallel(kpct_input_file: str, savedir: str, kpct_outprefix: str, n
         n_chunks = ncpus
 
         if logger:
-            logger.info(f"Running KPCT in parallel with {n_chunks} chunks using {ncpus} CPU cores")
+            logger.info(f"Running KPCT in parallel with up to {n_chunks} chunks using {ncpus} CPU cores")
 
-        typer.secho(f"🔧 Running KPCT in parallel with {n_chunks} chunks", fg="yellow")
+        typer.secho(f"🔧 Running KPCT in parallel with up to {n_chunks} chunks", fg="yellow")
 
 
         chunks_base_dir = os.path.join(get_tmp_dir(savedir), "kpct_chunk_outputs")
@@ -2197,6 +2299,19 @@ def run_kpct_parallel(kpct_input_file: str, savedir: str, kpct_outprefix: str, n
 
         if not chunk_files:
             return False
+
+        # Update n_chunks and expected_chunk_dirs to match actual chunks created
+        actual_n_chunks = len(chunk_files)
+        if actual_n_chunks != n_chunks:
+            if logger:
+                logger.info(f"Adjusting expected chunks from {n_chunks} to {actual_n_chunks} based on actual data")
+            n_chunks = actual_n_chunks
+            # Recreate expected_chunk_dirs with the correct number
+            expected_chunk_dirs = []
+            for i in range(n_chunks):
+                chunk_id = f"{i:03d}"
+                chunk_savedir = os.path.join(chunks_base_dir, f"chunk_{chunk_id}")
+                expected_chunk_dirs.append(chunk_savedir)
 
 
         chunks_to_process = []
@@ -2447,6 +2562,7 @@ def pipeline(genomedir: str,
              del_tmp: bool=True,
              calculate_complementarity: int=0,
              lowmem: bool = typer.Option(False, "--lowmem", help="Run emapper with reduced memory footprint, omitting --dbmem flag."),
+             verbose: bool = typer.Option(False, "--verbose", help="Enable verbose output with detailed progress information."),
              ) -> None:
     """
     Run the ModuComp pipeline on a directory of genome files.
@@ -2494,15 +2610,15 @@ def pipeline(genomedir: str,
     logger = setup_logging(savedir)
 
 
-    greetings()
-    typer.secho("\n📋 Initializing pipeline...", fg="green")
+    greetings(verbose)
+    conditional_output("\n📋 Initializing pipeline...", "green", verbose)
 
 
     genomedir = os.path.abspath(genomedir)
     savedir = os.path.abspath(savedir)
 
 
-    create_output_dir(savedir)
+    create_output_dir(savedir, verbose)
 
 
     logger.info(f"Pipeline started with parameters:")
@@ -2516,19 +2632,19 @@ def pipeline(genomedir: str,
 
 
     if check_final_reports_exist(savedir, calculate_complementarity, logger):
-        typer.secho("✅ [OK] All output files already exist. Skipping processing.", fg="green")
+        conditional_output("✅ [OK] All output files already exist. Skipping processing.", "green", verbose)
         if not del_tmp:
-            typer.secho("ℹ️ Keeping temporary files as requested.", fg="blue")
+            conditional_output("ℹ️ Keeping temporary files as requested.", "blue", verbose)
         logger.info("Pipeline skipped as all output files already exist")
         return
 
 
-    typer.secho(f"🔍 Checking genome directory: {genomedir}", fg="yellow")
-    how_many_genomes(genomedir)
+    conditional_output(f"🔍 Checking genome directory: {genomedir}", "yellow", verbose)
+    how_many_genomes(genomedir, verbose)
     logger.info(f"Found genome files in {genomedir}")
 
 
-    create_tmp_dir(savedir)
+    create_tmp_dir(savedir, verbose)
     logger.info(f"Temporary directory created/verified")
 
 
@@ -2542,15 +2658,15 @@ def pipeline(genomedir: str,
 
     if os.path.exists(ko_matrix_path):
         logger.info(f"KO matrix already exists: {ko_matrix_path}")
-        typer.secho(f"✅ [OK] Using existing KO matrix: {ko_matrix_path}", fg="white")
+        conditional_output(f"✅ [OK] Using existing KO matrix: {ko_matrix_path}", "white", verbose)
     else:
 
         if os.path.exists(emapper_annotation_file):
             logger.info(f"Emapper annotations already exist: {emapper_annotation_file}")
-            typer.secho(f"✅ [OK] Using existing emapper annotations: {emapper_annotation_file}", fg="white")
+            conditional_output(f"✅ [OK] Using existing emapper annotations: {emapper_annotation_file}", "white", verbose)
         elif os.path.exists(tmp_emapper_file):
             logger.info(f"Emapper annotations found in temp directory: {tmp_emapper_file}")
-            typer.secho(f"✅ [OK] Using existing emapper annotations from temp directory", fg="white")
+            conditional_output(f"✅ [OK] Using existing emapper annotations from temp directory", "white", verbose)
 
             try:
                 shutil.copy(tmp_emapper_file, emapper_annotation_file)
@@ -2564,16 +2680,16 @@ def pipeline(genomedir: str,
 
             if adapt_headers:
                 logger.info("Starting to adapt fasta headers")
-                adapt_fasta_headers(genomedir, savedir)
+                adapt_fasta_headers(genomedir, savedir, verbose)
                 logger.info("Completed adapting fasta headers")
             else:
                 logger.info("Copying FAA files to temporary directory")
-                copy_faa_to_tmp(genomedir, savedir)
+                copy_faa_to_tmp(genomedir, savedir, verbose)
                 logger.info("Completed copying FAA files")
 
 
             logger.info("Starting genome merging")
-            merge_success = merge_genomes(savedir, logger)
+            merge_success = merge_genomes(savedir, logger, verbose)
             if not merge_success:
                 logger.error("Failed to merge genomes. Exiting pipeline.")
                 typer.secho("❌ [ERROR] Failed to merge genomes. Exiting pipeline.", fg="red")
@@ -2581,7 +2697,7 @@ def pipeline(genomedir: str,
 
 
             logger.info(f"Starting eMapper with {ncpus} CPUs")
-            emapper_success = run_emapper(savedir, ncpus, lowmem, logger)
+            emapper_success = run_emapper(savedir, ncpus, lowmem, logger, verbose)
             if not emapper_success:
                 logger.error("Failed to run emapper. Exiting pipeline.")
                 typer.secho("❌ [ERROR] Failed to run emapper. Exiting pipeline.", fg="red")
@@ -2682,6 +2798,7 @@ def analyze_ko_matrix(
     kpct_outprefix: str="output_give_completeness",
     del_tmp: bool=True,
     ncpus: int=16,
+    verbose: bool = typer.Option(False, "--verbose", help="Enable verbose output with detailed progress information."),
     ) -> None:
     """
     Run module completeness analysis on a pre-existing KO matrix file using the KEGG Pathways Completeness Tool (KPCT).
