@@ -67,7 +67,11 @@ export EGGNOG_DATA_DIR="/path/to/datadir/to/store/eggnog-db"
 - For KPCT parallel processing, the system creates the same number of chunks as CPU cores specified
 - Example: `--ncpus 8` will use 8 cores and create 8 chunks for optimal parallel processing
 
-### Important Note
+### ⚠️ Important Note 1
+
+**Prepare FAA files**: Ensure FAA headers are in the form `>genomeName|proteinId`, or use the `--adapt-headers` option to format your headers into `>fileName_prefix|protein_id_counter`.
+
+### ⚠️ Important Note 2
 
 `moducomp` is specifically designed for large scale analysis of microbiomes with hundreds of members, and works on Linux systems with at least **64GB of RAM**. Nevertheless, it can be run on **smaller systems with less RAM, using the flag `--lowmem` when running the `pipeline` command**.
 
@@ -77,12 +81,14 @@ pixi shell
 ```
 Once in the shell, you can run `./moducomp.py --help` for a full list of commands and options.
 
+
+
 ### Testing the Pipeline (Example)
 
 To test the pipeline, you'll need a directory with some sample genome FAA files.
 
 1.  **Prepare FAA files**: Create a directory (e.g., `test_genomes/`) and place your sample `.faa` files in it.
-Ensure FAA headers are simple (e.g., `>protein_id`) or use the `--adapt-headers` option if they follow a `>genomeName|proteinId` format that needs processing into `>genomeName_prefix|protein_id_counter` for `emapper.py`.
+Ensure FAA headers are in the form `>genomeName|proteinId`, or use the `--adapt-headers` option to format your headers into `>fileName_prefix|protein_id_counter`.
 
 2.  **Run the pipeline command**:
 
@@ -93,7 +99,7 @@ pixi shell
 ./moducomp.py pipeline ./test_genomes ./output_test_pipeline --ncpus 16 --calculate-complementarity 3
 ```
 
-⚠️⚠️️⚠️ Note: If don't have enough RAM (>64GB), you can use the `--lowmem` flag to run the pipeline with less memory but it **will be slower**.
+⚠️ Note: If don't have enough RAM (>64GB), you can use the `--lowmem` flag to run the pipeline with less memory but it **will be slower**.
 
 ```bash
 pixi shell
