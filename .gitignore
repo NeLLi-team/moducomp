@@ -1,3 +1,4 @@
 output*
 test_parallel*
 test_ko_matrix.csv
+__pycache__

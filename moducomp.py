@@ -29,9 +29,11 @@ import itertools
 import logging
 import multiprocessing
 import os
+import queue
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from sys import exit
@@ -87,76 +89,145 @@ def run_subprocess_with_logging(
     conditional_output(f"🔧 {description}", "yellow", verbose)
     conditional_output(f"   Command: {' '.join(cmd)}", "blue", verbose)
 
-    try:
+    if verbose:
+        print(f"[DEBUG] Starting subprocess with command: {cmd[0]}")
+        print(f"[DEBUG] Working directory: {os.getcwd()}")
+        sys.stdout.flush()
 
+    try:
+        def stream_reader(stream, q, stream_type):
+            """Read from stream and put lines in queue"""
+            try:
+                while True:
+                    line = stream.readline()
+                    if not line:
+                        break
+                    line = line.rstrip('\n\r')
+                    q.put((stream_type, line))  # Put all lines, even empty ones
+                stream.close()
+            except Exception:
+                pass
+
+        # Start the process
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            bufsize=1,
+            bufsize=0,  # Unbuffered
             universal_newlines=True
         )
 
+        # Create queues for stdout and stderr
+        stdout_queue = queue.Queue()
+        stderr_queue = queue.Queue()
+
+        # Start threads to read stdout and stderr
+        stdout_thread = threading.Thread(
+            target=stream_reader,
+            args=(process.stdout, stdout_queue, 'stdout')
+        )
+        stderr_thread = threading.Thread(
+            target=stream_reader,
+            args=(process.stderr, stderr_queue, 'stderr')
+        )
+
+        stdout_thread.daemon = True
+        stderr_thread.daemon = True
+        stdout_thread.start()
+        stderr_thread.start()
+
         stdout_lines = []
         stderr_lines = []
+        last_output_time = time.time()
+        progress_interval = 1800  # Show progress every 30 minutes
 
+        if verbose:
+            print(f"[DEBUG] Starting to monitor subprocess output...")
+            print(f"[DEBUG] Process PID: {process.pid}")
+            print(f"[DEBUG] Process poll status: {process.poll()}")
+            sys.stdout.flush()
 
-        while True:
+        # Read from queues and process output in real-time
+        while process.poll() is None or not stdout_queue.empty() or not stderr_queue.empty():
+            current_time = time.time()
+            output_received = False
 
-            if process.poll() is not None:
+            # Check stdout queue
+            try:
+                stream_type, line = stdout_queue.get_nowait()
+                if stream_type == 'stdout':
+                    stdout_lines.append(line)
+                    # Stream to console immediately
+                    if verbose:
+                        print(line, flush=True)
+                        if len(stdout_lines) <= 3:  # Debug first few lines
+                            print(f"[DEBUG] Received stdout line {len(stdout_lines)}: {repr(line)}", flush=True)
+                    if logger:
+                        logger.info(line)
+                    last_output_time = current_time
+                    output_received = True
+            except queue.Empty:
+                pass
+
+            # Check stderr queue
+            try:
+                stream_type, line = stderr_queue.get_nowait()
+                if stream_type == 'stderr':
+                    stderr_lines.append(line)
+                    # Stream to console immediately
+                    if verbose:
+                        print(f"[STDERR] {line}", file=sys.stderr, flush=True)
+                        if len(stderr_lines) <= 3:  # Debug first few stderr lines
+                            print(f"[DEBUG] Received stderr line {len(stderr_lines)}: {repr(line)}", flush=True)
+                    if logger:
+                        logger.warning(line)
+                    last_output_time = current_time
+                    output_received = True
+            except queue.Empty:
+                pass
+
+            # Show progress message if no output for a while
+            if not output_received and current_time - last_output_time > progress_interval:
+                if verbose:
+                    elapsed = int(current_time - last_output_time)
+                    print(f"   ... still running (no output for {elapsed}s)", flush=True)
+                    print(f"[DEBUG] Process status: {process.poll()}, PID: {process.pid}", flush=True)
+                if logger:
+                    logger.info(f"Process still running, no output for {int(current_time - last_output_time)} seconds")
+                last_output_time = current_time
+
+            # Small delay to prevent busy waiting
+            time.sleep(0.05)  # Reduced delay for more responsive output
+
+        # Wait for threads to complete
+        stdout_thread.join(timeout=1.0)
+        stderr_thread.join(timeout=1.0)
+
+        # Get any remaining items from queues
+        while not stdout_queue.empty():
+            try:
+                stream_type, line = stdout_queue.get_nowait()
+                if stream_type == 'stdout':
+                    stdout_lines.append(line)
+                    if verbose:
+                        print(line, flush=True)
+                    if logger:
+                        logger.info(line)
+            except queue.Empty:
                 break
 
-
-            if process.stdout:
-                stdout_line = process.stdout.readline()
-                if stdout_line:
-                    stdout_line = stdout_line.rstrip('\n\r')
-                    stdout_lines.append(stdout_line)
-
-                    # Only show subprocess output in verbose mode
-                    if verbose:
-                        print(f"[STDOUT] {stdout_line}")
-
-                    if logger:
-                        logger.info(f"[STDOUT] {stdout_line}")
-
-
-            if process.stderr:
-                stderr_line = process.stderr.readline()
-                if stderr_line:
-                    stderr_line = stderr_line.rstrip('\n\r')
-                    stderr_lines.append(stderr_line)
-
-                    # Only show subprocess output in verbose mode
-                    if verbose:
-                        print(f"[STDERR] {stderr_line}", file=sys.stderr)
-
-                    if logger:
-                        logger.warning(f"[STDERR] {stderr_line}")
-
-
-        remaining_stdout, remaining_stderr = process.communicate()
-
-        if remaining_stdout:
-            for line in remaining_stdout.strip().split('\n'):
-                if line:
-                    stdout_lines.append(line)
-                    # Only show subprocess output in verbose mode
-                    if verbose:
-                        print(f"[STDOUT] {line}")
-                    if logger:
-                        logger.info(f"[STDOUT] {line}")
-
-        if remaining_stderr:
-            for line in remaining_stderr.strip().split('\n'):
-                if line:
+        while not stderr_queue.empty():
+            try:
+                stream_type, line = stderr_queue.get_nowait()
+                if stream_type == 'stderr':
                     stderr_lines.append(line)
-                    # Only show subprocess output in verbose mode
                     if verbose:
-                        print(f"[STDERR] {line}", file=sys.stderr)
+                        print(line, file=sys.stderr, flush=True)
                     if logger:
-                        logger.warning(f"[STDERR] {line}")
+                        logger.warning(line)
+            except queue.Empty:
+                break
 
         returncode = process.returncode
         stdout_str = '\n'.join(stdout_lines)
@@ -718,6 +789,7 @@ def run_emapper(savedir: str, ncpus: int, lowmem: bool = False, logger: Optional
 
     try:
         cmd_emapper = [
+            "stdbuf", "-o0", "-e0",  # Disable output buffering
             "emapper.py",
             "-i", merged_genomes_file,
             "--itype", "proteins",
@@ -728,11 +800,11 @@ def run_emapper(savedir: str, ncpus: int, lowmem: bool = False, logger: Optional
         if not lowmem:
             cmd_emapper.append("--dbmem")
 
-
         returncode, stdout, stderr = run_subprocess_with_logging(
             cmd_emapper,
             logger,
-            "Running eggNOG-mapper"
+            "Running eggNOG-mapper",
+            verbose
         )
 
         if returncode != 0:
@@ -2641,7 +2713,8 @@ def pipeline(genomedir: str,
 
     conditional_output(f"🔍 Checking genome directory: {genomedir}", "yellow", verbose)
     how_many_genomes(genomedir, verbose)
-    logger.info(f"Found genome files in {genomedir}")
+    n_genomes = len(get_path_to_each_genome(genomedir))
+    logger.info(f"Found {n_genomes} genome files in {genomedir}")
 
 
     create_tmp_dir(savedir, verbose)
