@@ -1,6 +1,6 @@
 [project]
 name = "moducomp"
-version = "0.1.0"
+version = "0.6.0"
 description = "moducomp for computing metabolic module completeness and complementarity"
 authors = ["Juan C. Villada <jvillada@lbl.gov>"]
 channels = ["conda-forge", "bioconda"]
