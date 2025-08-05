@@ -11,6 +11,7 @@
 - Calculation of module completeness for N-member genome combinations.
 - Generation of complementarity reports highlighting modules completed through genome partnerships.
 - Tracks and reports the actual proteins that are responsible for the completion of the module in the combination of N genomes.
+- **Automatic resource monitoring** with timestamped logs tracking CPU usage, memory consumption, and runtime for reproducibility.
 
 ## Installation
 
@@ -53,7 +54,7 @@ export EGGNOG_DATA_DIR="/path/to/datadir/to/store/eggnog-db"
 
 `moducomp` provides two main commands: `pipeline` and `analyze-ko-matrix`. You can run these commands using Pixi tasks defined in `pixi.toml` or directly within the Pixi environment.
 
-### Performance and Parallel Processing
+### Performance and parallel processing
 
 `moducomp` includes **parallel processing capabilities** for the KPCT (KEGG Pathways Completeness Tool) analysis, which can significantly improve performance for large datasets:
 
@@ -67,11 +68,11 @@ export EGGNOG_DATA_DIR="/path/to/datadir/to/store/eggnog-db"
 - For KPCT parallel processing, the system creates the same number of chunks as CPU cores specified
 - Example: `--ncpus 8` will use 8 cores and create 8 chunks for optimal parallel processing
 
-### ⚠️ Important Note 1
+### ⚠️ Important note 1
 
 **Prepare FAA files**: Ensure FAA headers are in the form `>genomeName|proteinId`, or use the `--adapt-headers` option to format your headers into `>fileName_prefix|protein_id_counter`.
 
-### ⚠️ Important Note 2
+### ⚠️ Important note 2
 
 `moducomp` is specifically designed for large scale analysis of microbiomes with hundreds of members, and works on Linux systems with at least **64GB of RAM**. Nevertheless, it can be run on **smaller systems with less RAM, using the flag `--lowmem` when running the `pipeline` command**.
 
@@ -83,7 +84,7 @@ Once in the shell, you can run `./moducomp.py --help` for a full list of command
 
 
 
-### Testing the Pipeline (Example)
+### Testing the pipeline (example)
 
 To test the pipeline, you'll need a directory with some sample genome FAA files.
 
@@ -145,11 +146,11 @@ pixi shell
     # --del-tmp false
 ```
 
-### Parallel Processing Features
+### Parallel processing features
 
 `moducomp` includes advanced parallel processing capabilities for improved performance:
 
-#### KPCT Parallel Processing
+#### KPCT parallel processing
 
 When using the `--ncpus` parameter with a value greater than 1, `moducomp` automatically enables parallel processing for the KPCT (KEGG Pathways Completeness Tool) analysis:
 
@@ -158,13 +159,13 @@ When using the `--ncpus` parameter with a value greater than 1, `moducomp` autom
 - **Resume capability**: If processing is interrupted, completed chunks are automatically detected and skipped on restart
 - **Automatic fallback**: If parallel processing fails, the system seamlessly falls back to sequential processing
 
-#### Performance Tips
+#### Performance tips
 
 - **CPU cores**: Start with `--ncpus 8` for moderate datasets, increase to `--ncpus 16` or higher for large datasets
 - **Memory considerations**: Each parallel worker requires memory; reduce `--ncpus` if you encounter memory issues
 - **Large datasets**: For datasets with hundreds of genomes, parallel processing can reduce KPCT analysis time by 50-80%
 
-#### Example with Parallel Processing
+#### Example with parallel processing
 
 ```bash
 # For large datasets with sufficient resources
@@ -176,6 +177,16 @@ When using the `--ncpus` parameter with a value greater than 1, `moducomp` autom
 # For systems with limited memory
 ./moducomp.py pipeline ./genomes ./output_lowmem --ncpus 8 --lowmem --calculate-complementarity 2
 ```
+
+## Output files
+
+`moducomp` generates several output files in the specified output directory:
+
+- **`kos_matrix.csv`**: Matrix of KO counts for each genome
+- **`module_completeness.tsv`**: Module completeness scores for individual genomes and combinations
+- **`module_completeness_complementarity_Nmember.tsv`**: Complementarity reports (if requested)
+- **`resource_usage_YYYYMMDD_HHMMSS.log`**: Resource monitoring log with CPU, memory, and runtime metrics for reproducibility
+- **`moducomp_YYYYMMDD_HHMMSS.log`**: Detailed pipeline execution log
 
 ## Citation
 Villada, JC. & Schulz, F. (2025). Assessment of metabolic module completeness of genomes and metabolic complementarity in microbiomes with `moducomp` . `moducomp` (v0.5.1) Zenodo. https://doi.org/10.5281/zenodo.16116092

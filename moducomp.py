@@ -246,6 +246,209 @@ def run_subprocess_with_logging(
         return -1, "", str(e)
 
 
+def setup_resource_logging(savedir: str) -> str:
+    """
+    Set up resource usage logging file with timestamp.
+
+    Parameters
+    ----------
+    savedir : str
+        Directory to save the resource log file
+
+    Returns
+    -------
+    str
+        Path to the resource log file
+    """
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    resource_log_file = os.path.join(savedir, f"resource_usage_{timestamp}.log")
+
+    # Create header for resource log file
+    with open(resource_log_file, 'w') as f:
+        f.write("# ModuComp Resource Usage Report\n")
+        f.write(f"# Generated on: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write("# Format: Timestamp | Command | Elapsed_Time(s) | User_Time(s) | System_Time(s) | CPU_Percent | Max_RAM(GB) | Exit_Code\n")
+        f.write("#" + "="*120 + "\n\n")
+
+    return resource_log_file
+
+
+def run_subprocess_with_resource_monitoring(
+    cmd: List[str],
+    resource_log_file: str,
+    logger: Optional[logging.Logger] = None,
+    description: str = "Running command",
+    verbose: bool = True
+) -> Tuple[int, str, str]:
+    """
+    Run a subprocess command with resource monitoring using /usr/bin/time.
+
+    Parameters
+    ----------
+    cmd : List[str]
+        Command and arguments to run
+    resource_log_file : str
+        Path to the resource usage log file
+    logger : Optional[logging.Logger], optional
+        Logger instance for logging progress
+    description : str, optional
+        Description of what the command does for user display
+    verbose : bool, optional
+        Whether to display detailed output
+
+    Returns
+    -------
+    Tuple[int, str, str]
+        Return code, stdout, and stderr as strings
+    """
+    # Create time format string for detailed resource monitoring
+    time_format = (
+        "Command: %C\n"
+        "Elapsed Time (wall clock): %E\n"
+        "Elapsed Time (seconds): %e\n"
+        "User Time (seconds): %U\n"
+        "System Time (seconds): %S\n"
+        "CPU Percentage: %P\n"
+        "Maximum RAM (KB): %M\n"
+        "Exit Status: %x\n"
+        "Major Page Faults: %F\n"
+        "Minor Page Faults: %R\n"
+        "Context Switches (voluntary): %w\n"
+        "Context Switches (involuntary): %c\n"
+    )
+
+    # Create temporary file for time output
+    temp_time_file = f"{resource_log_file}.tmp"
+
+    # Wrap the original command with /usr/bin/time
+    time_cmd = [
+        "/usr/bin/time",
+        "-f", time_format,
+        "-o", temp_time_file
+    ] + cmd
+
+    if logger:
+        logger.info(f"{description}: {' '.join(cmd)}")
+        logger.info(f"Resource monitoring enabled, output will be logged to: {resource_log_file}")
+
+    conditional_output(f"🔧 {description} (with resource monitoring)", "yellow", verbose)
+    conditional_output(f"   Command: {' '.join(cmd)}", "blue", verbose)
+
+    start_time = datetime.datetime.now()
+
+    # Run the command with the existing subprocess function but with time wrapper
+    returncode, stdout, stderr = run_subprocess_with_logging(
+        time_cmd, logger, description, verbose
+    )
+
+    end_time = datetime.datetime.now()
+
+    # Parse resource usage from temporary file
+    resource_info = {}
+    if os.path.exists(temp_time_file):
+        try:
+            with open(temp_time_file, 'r') as f:
+                time_output = f.read()
+
+            # Parse the time output
+            for line in time_output.strip().split('\n'):
+                if ':' in line:
+                    key, value = line.split(':', 1)
+                    resource_info[key.strip()] = value.strip()
+
+            # Extract key metrics for summary
+            elapsed_seconds = resource_info.get('Elapsed Time (seconds)', 'N/A')
+            user_time = resource_info.get('User Time (seconds)', 'N/A')
+            system_time = resource_info.get('System Time (seconds)', 'N/A')
+            cpu_percent = resource_info.get('CPU Percentage', 'N/A')
+            max_ram_kb = resource_info.get('Maximum RAM (KB)', 'N/A')
+            exit_status = resource_info.get('Exit Status', str(returncode))
+
+            # Convert RAM from KB to GB
+            try:
+                max_ram_gb = float(max_ram_kb) / (1024 * 1024) if max_ram_kb != 'N/A' else 'N/A'
+                max_ram_gb_str = f"{max_ram_gb:.3f}" if max_ram_gb != 'N/A' else 'N/A'
+            except (ValueError, TypeError):
+                max_ram_gb_str = 'N/A'
+
+            # Write summary to resource log
+            timestamp_str = start_time.strftime("%Y-%m-%d %H:%M:%S")
+            cmd_str = ' '.join(cmd)
+
+            with open(resource_log_file, 'a') as f:
+                f.write(f"{timestamp_str} | {cmd_str} | {elapsed_seconds} | {user_time} | {system_time} | {cpu_percent} | {max_ram_gb_str} | {exit_status}\n")
+                f.write("# Detailed resource information:\n")
+                for key, value in resource_info.items():
+                    f.write(f"# {key}: {value}\n")
+                f.write("\n")
+
+            # Display resource summary
+            if verbose:
+                conditional_output("\n📊 Resource Usage Summary:", "cyan", verbose)
+                conditional_output(f"   ⏱️  Wall Clock Time: {elapsed_seconds}s", "white", verbose)
+                conditional_output(f"   💻 CPU Time (User): {user_time}s", "white", verbose)
+                conditional_output(f"   🔧 CPU Time (System): {system_time}s", "white", verbose)
+                conditional_output(f"   📈 CPU Usage: {cpu_percent}", "white", verbose)
+                conditional_output(f"   🧠 Peak RAM Usage: {max_ram_gb_str} GB", "white", verbose)
+                conditional_output(f"   ✅ Exit Code: {exit_status}\n", "white", verbose)
+
+            if logger:
+                logger.info(f"Resource usage - Wall time: {elapsed_seconds}s, CPU: {cpu_percent}, Peak RAM: {max_ram_gb_str} GB")
+
+        except Exception as e:
+            if logger:
+                logger.warning(f"Failed to parse resource usage: {str(e)}")
+            conditional_output(f"⚠️  Warning: Could not parse resource usage: {str(e)}", "yellow", verbose)
+
+        # Clean up temporary file
+        try:
+            os.remove(temp_time_file)
+        except OSError:
+            pass
+
+    else:
+        if logger:
+            logger.warning("Resource monitoring file not found")
+        conditional_output("⚠️  Warning: Resource monitoring output not found", "yellow", verbose)
+
+    return returncode, stdout, stderr
+
+
+def log_final_resource_summary(resource_log_file: str, total_start_time: float, logger: Optional[logging.Logger] = None, verbose: bool = True) -> None:
+    """
+    Log final resource summary at the end of the pipeline.
+
+    Parameters
+    ----------
+    resource_log_file : str
+        Path to the resource usage log file
+    total_start_time : float
+        Start time of the entire pipeline (from time.time())
+    logger : Optional[logging.Logger], optional
+        Logger instance
+    verbose : bool, optional
+        Whether to display summary to console
+    """
+    total_elapsed = time.time() - total_start_time
+    end_time = datetime.datetime.now()
+
+    with open(resource_log_file, 'a') as f:
+        f.write("\n" + "="*120 + "\n")
+        f.write("# PIPELINE SUMMARY\n")
+        f.write(f"# Pipeline completed at: {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"# Total pipeline elapsed time: {total_elapsed:.2f} seconds ({total_elapsed/60:.2f} minutes)\n")
+        f.write("="*120 + "\n")
+
+    if verbose:
+        conditional_output("\n🎯 Resource Usage Summary Logged", "green", verbose)
+        conditional_output(f"   📋 Full report saved to: {resource_log_file}", "cyan", verbose)
+        conditional_output(f"   ⏱️  Total pipeline time: {total_elapsed:.2f}s ({total_elapsed/60:.2f}min)", "white", verbose)
+
+    if logger:
+        logger.info(f"Resource usage summary completed. Total time: {total_elapsed:.2f}s")
+        logger.info(f"Resource log saved to: {resource_log_file}")
+
+
 def parse_emapper_annotations(emapper_file_path: str, logger: Optional[logging.Logger] = None) -> Dict[str, Dict[str, List[str]]]:
     """
     Parses an emapper annotation file to extract protein to KO mappings.
@@ -724,7 +927,7 @@ def merge_genomes(savedir: str, logger: Optional[logging.Logger] = None, verbose
         return False
 
 
-def run_emapper(savedir: str, ncpus: int, lowmem: bool = False, logger: Optional[logging.Logger] = None, verbose: bool = True) -> bool:
+def run_emapper(savedir: str, ncpus: int, resource_log_file: str, lowmem: bool = False, logger: Optional[logging.Logger] = None, verbose: bool = True) -> bool:
     """
     Run eggNOG-mapper on the merged genomes file.
 
@@ -800,8 +1003,9 @@ def run_emapper(savedir: str, ncpus: int, lowmem: bool = False, logger: Optional
         if not lowmem:
             cmd_emapper.append("--dbmem")
 
-        returncode, stdout, stderr = run_subprocess_with_logging(
+        returncode, stdout, stderr = run_subprocess_with_resource_monitoring(
             cmd_emapper,
+            resource_log_file,
             logger,
             "Running eggNOG-mapper",
             verbose
@@ -2497,7 +2701,7 @@ def run_kpct_parallel(kpct_input_file: str, savedir: str, kpct_outprefix: str, n
         return False
 
 
-def run_kpct(kpct_input_file: str, savedir: str, kpct_outprefix: str, logger: Optional[logging.Logger] = None) -> bool:
+def run_kpct(kpct_input_file: str, savedir: str, kpct_outprefix: str, resource_log_file: str, logger: Optional[logging.Logger] = None) -> bool:
     """
     Run the KPCT give_completeness tool (sequential version).
     This function is kept as a fallback in case parallel processing fails.
@@ -2530,10 +2734,12 @@ def run_kpct(kpct_input_file: str, savedir: str, kpct_outprefix: str, logger: Op
         ]
 
 
-        returncode, stdout, stderr = run_subprocess_with_logging(
+        returncode, stdout, stderr = run_subprocess_with_resource_monitoring(
             kpct_cmd,
+            resource_log_file,
             logger,
-            "Running KPCT give_completeness tool (sequential)"
+            "Running KPCT give_completeness tool (sequential)",
+            True
         )
 
         if returncode != 0:
@@ -2581,7 +2787,7 @@ def run_kpct(kpct_input_file: str, savedir: str, kpct_outprefix: str, logger: Op
         return False
 
 
-def run_kpct_with_fallback(kpct_input_file: str, savedir: str, kpct_outprefix: str, ncpus: int, logger: Optional[logging.Logger] = None) -> bool:
+def run_kpct_with_fallback(kpct_input_file: str, savedir: str, kpct_outprefix: str, ncpus: int, resource_log_file: str, logger: Optional[logging.Logger] = None) -> bool:
     """
     Run KPCT with parallel processing and fallback to sequential if parallel fails.
 
@@ -2621,7 +2827,7 @@ def run_kpct_with_fallback(kpct_input_file: str, savedir: str, kpct_outprefix: s
     if logger:
         logger.info("Running KPCT in sequential mode")
 
-    return run_kpct(kpct_input_file, savedir, kpct_outprefix, logger)
+    return run_kpct(kpct_input_file, savedir, kpct_outprefix, resource_log_file, logger)
 
 
 app = typer.Typer()
@@ -2678,9 +2884,13 @@ def pipeline(genomedir: str,
     """
     start_time = time.time()
 
-
+    # Setup logging
     logger = setup_logging(savedir)
 
+    # Setup resource monitoring
+    resource_log_file = setup_resource_logging(savedir)
+    if logger:
+        logger.info(f"Resource monitoring enabled. Log file: {resource_log_file}")
 
     greetings(verbose)
     conditional_output("\n📋 Initializing pipeline...", "green", verbose)
@@ -2770,7 +2980,7 @@ def pipeline(genomedir: str,
 
 
             logger.info(f"Starting eMapper with {ncpus} CPUs")
-            emapper_success = run_emapper(savedir, ncpus, lowmem, logger, verbose)
+            emapper_success = run_emapper(savedir, ncpus, resource_log_file, lowmem, logger, verbose)
             if not emapper_success:
                 logger.error("Failed to run emapper. Exiting pipeline.")
                 typer.secho("❌ [ERROR] Failed to run emapper. Exiting pipeline.", fg="red")
@@ -2823,7 +3033,7 @@ def pipeline(genomedir: str,
 
 
             logger.info(f"Running KPCT with parallel processing on file: {kpct_input_file}")
-            kpct_success = run_kpct_with_fallback(kpct_input_file, savedir, kpct_outprefix, ncpus, logger)
+            kpct_success = run_kpct_with_fallback(kpct_input_file, savedir, kpct_outprefix, ncpus, resource_log_file, logger)
             if not kpct_success:
                 return
         else:
@@ -2856,6 +3066,8 @@ def pipeline(genomedir: str,
         logger.info("Cleaning up temporary files")
         remove_temp_files(savedir, logger)
 
+    # Generate final resource usage summary
+    log_final_resource_summary(resource_log_file, start_time, logger, verbose)
 
     end_time = time.time()
     elapsed_time = end_time - start_time
@@ -2916,8 +3128,16 @@ def analyze_ko_matrix(
     kos_matrix = os.path.abspath(kos_matrix)
     savedir = os.path.abspath(savedir)
 
-    greetings()
-    typer.secho("\n📋 Initializing KO matrix analysis...", fg="green")
+    # Setup logging
+    logger = setup_logging(savedir)
+
+    # Setup resource monitoring
+    resource_log_file = setup_resource_logging(savedir)
+    if logger:
+        logger.info(f"Resource monitoring enabled. Log file: {resource_log_file}")
+
+    greetings(verbose)
+    conditional_output("\n📋 Initializing KO matrix analysis...", "green", verbose)
 
 
     if not os.path.exists(kos_matrix):
@@ -2989,7 +3209,7 @@ def analyze_ko_matrix(
 
 
             logger.info(f"Running KPCT with parallel processing on file: {kpct_input_file}")
-            kpct_success = run_kpct_with_fallback(kpct_input_file, savedir, kpct_outprefix, ncpus, logger)
+            kpct_success = run_kpct_with_fallback(kpct_input_file, savedir, kpct_outprefix, ncpus, resource_log_file, logger)
             if not kpct_success:
                 exit(1)
         else:
@@ -3027,6 +3247,8 @@ def analyze_ko_matrix(
                 logger.info("Cleaning up temporary files")
             remove_temp_files(savedir, logger)
 
+        # Generate final resource usage summary
+        log_final_resource_summary(resource_log_file, start_time, logger, verbose)
 
         end_time = time.time()
 
