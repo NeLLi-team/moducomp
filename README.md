@@ -98,6 +98,8 @@ If you have enough RAM (>64GB), you can run the pipeline with the following comm
 ```bash
 pixi shell
 ./moducomp.py pipeline ./test_genomes ./output_test_pipeline --ncpus 16 --calculate-complementarity 3
+# For verbose output with detailed progress information:
+# ./moducomp.py pipeline ./test_genomes ./output_test_pipeline_verbose3 --ncpus 128 --calculate-complementarity 3 --verbose
 ```
 
 ⚠️ Note: If don't have enough RAM (>64GB), you can use the `--lowmem` flag to run the pipeline with less memory but it **will be slower**.
@@ -125,6 +127,7 @@ pixi shell
     # --lowmem                    # Optional: Use this if you have less than 64GB of RAM
     # --adapt-headers             # If your FASTA headers need modification
     # --del-tmp                   # To delete temporary files
+    # --verbose                   # Enable verbose output with detailed progress information
 ```
 
 #### `analyze-ko-matrix` command
@@ -144,6 +147,7 @@ pixi shell
 
     # Optional flags:
     # --del-tmp false
+    # --verbose                   # Enable verbose output with detailed progress information
 ```
 
 ### Parallel processing features
@@ -171,8 +175,8 @@ When using the `--ncpus` parameter with a value greater than 1, `moducomp` autom
 # For large datasets with sufficient resources
 ./moducomp.py pipeline ./large_genome_collection ./output_large --ncpus 32 --calculate-complementarity 3
 
-# For moderate datasets
-./moducomp.py analyze-ko-matrix ./ko_matrix.csv ./output_moderate --ncpus 16 --calculate-complementarity 2
+# For moderate datasets with verbose output
+./moducomp.py analyze-ko-matrix ./ko_matrix.csv ./output_moderate --ncpus 16 --calculate-complementarity 2 --verbose
 
 # For systems with limited memory
 ./moducomp.py pipeline ./genomes ./output_lowmem --ncpus 8 --lowmem --calculate-complementarity 2

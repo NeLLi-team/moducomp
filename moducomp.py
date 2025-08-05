@@ -437,6 +437,73 @@ def log_final_resource_summary(resource_log_file: str, total_start_time: float, 
         logger.info(f"Resource log saved to: {resource_log_file}")
 
 
+def display_pipeline_completion_summary(start_time: float, savedir: str, logger: Optional[logging.Logger] = None, verbose: bool = True) -> None:
+    """
+    Display a nicely formatted pipeline completion summary.
+
+    Parameters
+    ----------
+    start_time : float
+        Start time of the entire pipeline (from time.time())
+    savedir : str
+        Directory where outputs were saved
+    logger : Optional[logging.Logger], optional
+        Logger instance
+    verbose : bool, optional
+        Whether to display summary to console
+    """
+    end_time = time.time()
+    total_elapsed = end_time - start_time
+
+    # Convert time to human readable format
+    hours = int(total_elapsed // 3600)
+    minutes = int((total_elapsed % 3600) // 60)
+    seconds = int(total_elapsed % 60)
+
+    if hours > 0:
+        time_str = f"{hours}h {minutes}m {seconds}s"
+    elif minutes > 0:
+        time_str = f"{minutes}m {seconds}s"
+    else:
+        time_str = f"{seconds}s"
+
+    # Count output files
+    output_files = []
+    if os.path.exists(f"{savedir}/kos_matrix.csv"):
+        output_files.append("KO matrix")
+    if os.path.exists(f"{savedir}/module_completeness.tsv"):
+        output_files.append("Module completeness matrix")
+
+    # Count complementarity reports
+    complementarity_files = 0
+    for i in range(2, 10):  # Check up to 10-member combinations
+        if os.path.exists(f"{savedir}/module_completeness_complementarity_{i}member.tsv"):
+            complementarity_files += 1
+
+    if complementarity_files > 0:
+        output_files.append(f"{complementarity_files} complementarity report(s)")
+
+    if verbose:
+        conditional_output("\n" + "="*80, "green", verbose)
+        conditional_output("🎉 MODUCOMP PIPELINE COMPLETED SUCCESSFULLY!", "green", verbose)
+        conditional_output("="*80, "green", verbose)
+        conditional_output(f"📊 Total execution time: {time_str} ({total_elapsed:.2f} seconds)", "white", verbose)
+        conditional_output(f"📁 Output directory: {savedir}", "cyan", verbose)
+        conditional_output(f"📋 Generated files: {', '.join(output_files) if output_files else 'None'}", "white", verbose)
+        conditional_output(f"⏰ Completed at: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", "white", verbose)
+        conditional_output("="*80, "green", verbose)
+
+    if logger:
+        logger.info("="*80)
+        logger.info("MODUCOMP PIPELINE COMPLETED SUCCESSFULLY!")
+        logger.info("="*80)
+        logger.info(f"Total execution time: {time_str} ({total_elapsed:.2f} seconds)")
+        logger.info(f"Output directory: {savedir}")
+        logger.info(f"Generated files: {', '.join(output_files) if output_files else 'None'}")
+        logger.info(f"Completed at: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info("="*80)
+
+
 def parse_emapper_annotations(emapper_file_path: str, logger: Optional[logging.Logger] = None) -> Dict[str, Dict[str, List[str]]]:
     """
     Parses an emapper annotation file to extract protein to KO mappings.
@@ -1105,7 +1172,8 @@ def check_final_reports_exist(savedir: str, calculate_complementarity: int, logg
 def generate_complementarity_report(
     savedir: str,
     n_members: int = 2,
-    logger: Optional[logging.Logger] = None
+    logger: Optional[logging.Logger] = None,
+    verbose: bool = True
     ) -> None:
     """
     Generate a complementarity report showing modules completed only through genome partnerships.
@@ -1132,6 +1200,8 @@ def generate_complementarity_report(
         Must be >= 2. Higher values find more complex complementarity patterns.
     logger : Optional[logging.Logger], optional
         Logger instance for logging progress and statistics
+    verbose : bool, optional
+        Enable verbose output with detailed progress information, by default True
 
     Output Files
     ------------
@@ -1160,7 +1230,7 @@ def generate_complementarity_report(
     if os.path.exists(output_file):
         if logger:
             logger.info(f"Complementarity report already exists at {output_file}")
-        typer.secho(f"✅ [OK] Complementarity report already exists at: {output_file}", fg="white")
+        conditional_output(f"✅ [OK] Complementarity report already exists at: {output_file}", "white", verbose)
         return
 
 
@@ -1568,8 +1638,8 @@ def generate_complementarity_report(
                 logger.info(f"Found {len(report_df)} complementary modules in {n_members}-member combinations")
                 logger.info(f"Complementarity report saved to: {output_file}")
 
-            typer.secho(f"✅ [OK] Found {len(report_df)} complementary modules in {n_members}-member combinations", fg="green")
-            typer.secho(f"Complementarity report saved to: {output_file}", fg="white")
+            conditional_output(f"✅ [OK] Found {len(report_df)} complementary modules in {n_members}-member combinations", "green", verbose)
+            conditional_output(f"Complementarity report saved to: {output_file}", "white", verbose)
         else:
             if logger:
                 logger.info(f"No modules found that are exactly 100% complete in {n_members}-member combinations but incomplete in all individuals")
@@ -3045,7 +3115,7 @@ def _run_pipeline_core(genomedir: str, savedir: str, ncpus: int, adapt_headers: 
                 typer.secho(f"✅ [OK] Using existing {n_members}-member complementarity report: {complementarity_report_file}", fg="white")
             else:
                 logger.info(f"Generating complementarity report for {n_members}-member combinations")
-                generate_complementarity_report(savedir, n_members, logger)
+                generate_complementarity_report(savedir, n_members, logger, verbose)
 
     # Clean up temporary files if requested
     if del_tmp:
@@ -3055,10 +3125,8 @@ def _run_pipeline_core(genomedir: str, savedir: str, ncpus: int, adapt_headers: 
     # Generate final resource usage summary
     log_final_resource_summary(resource_log_file, start_time, logger, verbose)
 
-    end_time = time.time()
-    elapsed_time = end_time - start_time
-    typer.secho(f"\n✅ Pipeline completed successfully in {elapsed_time:.2f} seconds", fg="green", bold=True)
-    logger.info(f"Pipeline completed in {elapsed_time:.2f} seconds")
+    # Display pipeline completion summary
+    display_pipeline_completion_summary(start_time, savedir, logger, verbose)
 
 
 @app.command()
@@ -3225,7 +3293,7 @@ def analyze_ko_matrix(
                     typer.secho(f"✅ [OK] Using existing {n_members}-member complementarity report: {complementarity_report_file}", fg="white")
                 else:
                     logger.info(f"Generating complementarity report for {n_members}-member combinations")
-                    generate_complementarity_report(savedir, n_members, logger)
+                    generate_complementarity_report(savedir, n_members, logger, verbose)
 
 
         if del_tmp:
@@ -3236,14 +3304,8 @@ def analyze_ko_matrix(
         # Generate final resource usage summary
         log_final_resource_summary(resource_log_file, start_time, logger, verbose)
 
-        end_time = time.time()
-
-        typer.secho(f"\n✅ KO matrix KPCT analysis completed in {end_time - start_time:.2f} seconds", fg="green")
-        typer.secho(f" Output directory: {savedir}", fg="green")
-
-        if logger:
-            logger.info(f"Analysis completed in {end_time - start_time:.2f} seconds")
-            logger.info(f"Output directory: {savedir}")
+        # Display pipeline completion summary
+        display_pipeline_completion_summary(start_time, savedir, logger, verbose)
 
     except Exception as e:
         if logger:
