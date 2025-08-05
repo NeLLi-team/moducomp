@@ -86,7 +86,7 @@ def run_subprocess_with_logging(
         logger.info(f"{description}: {' '.join(cmd)}")
 
     # Only show detailed command info in verbose mode
-    conditional_output(f"🔧 {description}", "yellow", verbose)
+    conditional_output(f"Running {description}", "yellow", verbose)
     conditional_output(f"   Command: {' '.join(cmd)}", "blue", verbose)
 
     if verbose:
@@ -242,7 +242,7 @@ def run_subprocess_with_logging(
         error_msg = f"Exception running command {' '.join(cmd)}: {str(e)}"
         if logger:
             logger.error(error_msg)
-        print(f"[ERROR] {error_msg}", file=sys.stderr)
+        print(f"❌ [ERROR] {error_msg}", file=sys.stderr)
         return -1, "", str(e)
 
 
@@ -318,15 +318,15 @@ def run_subprocess_with_resource_monitoring(
         logger.info(f"{description}: {' '.join(cmd)}")
         logger.info(f"Resource monitoring enabled, output will be logged to: {resource_log_file}")
 
-    conditional_output(f"🔧 {description} (with resource monitoring)", "yellow", verbose)
+    conditional_output(f"Running {description} (with resource monitoring)", "yellow", verbose)
     conditional_output(f"   Command: {' '.join(cmd)}", "blue", verbose)
 
     start_time = datetime.datetime.now()
 
     # Run the command with the existing subprocess function but with time wrapper
-    # Note: Pass None as logger to avoid logging the verbose time command
+    # Note: Pass None as logger and verbose=False to avoid duplicate command display
     returncode, stdout, stderr = run_subprocess_with_logging(
-        time_cmd, None, description, verbose
+        time_cmd, None, description, False
     )
 
     end_time = datetime.datetime.now()
@@ -372,13 +372,13 @@ def run_subprocess_with_resource_monitoring(
 
             # Display resource summary
             if verbose:
-                conditional_output("\n📊 Resource Usage Summary:", "cyan", verbose)
-                conditional_output(f"   ⏱️  Wall Clock Time: {elapsed_seconds}s", "white", verbose)
-                conditional_output(f"   💻 CPU Time (User): {user_time}s", "white", verbose)
-                conditional_output(f"   🔧 CPU Time (System): {system_time}s", "white", verbose)
-                conditional_output(f"   📈 CPU Usage: {cpu_percent}", "white", verbose)
-                conditional_output(f"   🧠 Peak RAM Usage: {max_ram_gb_str} GB", "white", verbose)
-                conditional_output(f"   ✅ Exit Code: {exit_status}\n", "white", verbose)
+                conditional_output("\nResource Usage Summary:", "cyan", verbose)
+                conditional_output(f"   Wall Clock Time: {elapsed_seconds}s", "white", verbose)
+                conditional_output(f"   CPU Time (User): {user_time}s", "white", verbose)
+                conditional_output(f"   CPU Time (System): {system_time}s", "white", verbose)
+                conditional_output(f"   CPU Usage: {cpu_percent}", "white", verbose)
+                conditional_output(f"   Peak RAM Usage: {max_ram_gb_str} GB", "white", verbose)
+                conditional_output(f"   Exit Code: {exit_status}\n", "white", verbose)
 
             if logger:
                 logger.info(f"Resource usage - Wall time: {elapsed_seconds}s, CPU: {cpu_percent}, Peak RAM: {max_ram_gb_str} GB")
@@ -386,7 +386,7 @@ def run_subprocess_with_resource_monitoring(
         except Exception as e:
             if logger:
                 logger.warning(f"Failed to parse resource usage: {str(e)}")
-            conditional_output(f"⚠️  Warning: Could not parse resource usage: {str(e)}", "yellow", verbose)
+            conditional_output(f"Warning: Could not parse resource usage: {str(e)}", "yellow", verbose)
 
         # Clean up temporary file
         try:
@@ -397,7 +397,7 @@ def run_subprocess_with_resource_monitoring(
     else:
         if logger:
             logger.warning("Resource monitoring file not found")
-        conditional_output("⚠️  Warning: Resource monitoring output not found", "yellow", verbose)
+        conditional_output("Warning: Resource monitoring output not found", "yellow", verbose)
 
     return returncode, stdout, stderr
 
@@ -428,9 +428,9 @@ def log_final_resource_summary(resource_log_file: str, total_start_time: float, 
         f.write("="*120 + "\n")
 
     if verbose:
-        conditional_output("\n🎯 Resource Usage Summary Logged", "green", verbose)
-        conditional_output(f"   📋 Full report saved to: {resource_log_file}", "cyan", verbose)
-        conditional_output(f"   ⏱️  Total pipeline time: {total_elapsed:.2f}s ({total_elapsed/60:.2f}min)", "white", verbose)
+        conditional_output("\nResource Usage Summary Logged", "green", verbose)
+        conditional_output(f"   Full report saved to: {resource_log_file}", "cyan", verbose)
+        conditional_output(f"   Total pipeline time: {total_elapsed:.2f}s ({total_elapsed/60:.2f}min)", "white", verbose)
 
     if logger:
         logger.info(f"Resource usage summary completed. Total time: {total_elapsed:.2f}s")
@@ -485,12 +485,12 @@ def display_pipeline_completion_summary(start_time: float, savedir: str, logger:
 
     if verbose:
         conditional_output("\n" + "="*80, "green", verbose)
-        conditional_output("🎉 MODUCOMP PIPELINE COMPLETED SUCCESSFULLY!", "green", verbose)
+        conditional_output("MODUCOMP PIPELINE COMPLETED SUCCESSFULLY!", "green", verbose)
         conditional_output("="*80, "green", verbose)
-        conditional_output(f"📊 Total execution time: {time_str} ({total_elapsed:.2f} seconds)", "white", verbose)
-        conditional_output(f"📁 Output directory: {savedir}", "cyan", verbose)
-        conditional_output(f"📋 Generated files: {', '.join(output_files) if output_files else 'None'}", "white", verbose)
-        conditional_output(f"⏰ Completed at: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", "white", verbose)
+        conditional_output(f"Total execution time: {time_str} ({total_elapsed:.2f} seconds)", "white", verbose)
+        conditional_output(f"Output directory: {savedir}", "cyan", verbose)
+        conditional_output(f"Generated files: {', '.join(output_files) if output_files else 'None'}", "white", verbose)
+        conditional_output(f"Completed at: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", "white", verbose)
         conditional_output("="*80, "green", verbose)
 
     if logger:
@@ -750,7 +750,7 @@ def greetings(verbose: bool = True):
     This function displays a formatted greeting message to the user
     when the application starts.
     """
-    my_name = "\n📊 ModuComp"
+    my_name = "\nModuComp"
     conditional_output(my_name, "green", verbose)
 
 
@@ -806,7 +806,7 @@ def create_output_dir(savedir: str, verbose: bool = True):
     verbose : bool
         Whether to display detailed output
     """
-    conditional_output("\n📊 Creating output directory", "green", verbose)
+    conditional_output("\nCreating output directory", "green", verbose)
     if os.path.exists(savedir):
         conditional_output(f"✅ [OK] Output directory already exists at: {savedir}\n", "white", verbose)
     else:
@@ -843,7 +843,7 @@ def create_tmp_dir(savedir: str, verbose: bool = True):
     verbose : bool
         Whether to display detailed output
     """
-    conditional_output("\n📊 Creating tmp dir", "green", verbose)
+    conditional_output("\nCreating tmp dir", "green", verbose)
     tmp_dir_path = get_tmp_dir(savedir)
     if (os.path.exists(tmp_dir_path)):
         conditional_output(f"✅ [OK] Tmp directory already exists at: {tmp_dir_path}\n", "white", verbose)
@@ -870,7 +870,7 @@ def adapt_fasta_headers(genomedir: str, savedir: str, verbose: bool = True) -> N
     verbose : bool
         Whether to display detailed output
     """
-    conditional_output("\n📊 Modifying fasta headers", "green", verbose)
+    conditional_output("\nModifying fasta headers", "green", verbose)
     path_to_each_genome = get_path_to_each_genome(genomedir)
     output_dir = f"{get_tmp_dir(savedir)}/faa"
     if os.path.exists(output_dir):
@@ -910,7 +910,7 @@ def copy_faa_to_tmp(genomedir: str, savedir: str, verbose: bool = True) -> None:
     verbose : bool
         Whether to display detailed output
     """
-    conditional_output("\n📊 Copying faa files to tmp dir", "green", verbose)
+    conditional_output("\nCopying faa files to tmp dir", "green", verbose)
     path_to_each_genome = get_path_to_each_genome(genomedir)
     output_dir = f"{get_tmp_dir(savedir)}/faa"
     if os.path.exists(output_dir):
@@ -942,7 +942,7 @@ def merge_genomes(savedir: str, logger: Optional[logging.Logger] = None, verbose
     bool
         True if the merged file was created or already exists, False otherwise
     """
-    conditional_output("\n📊 Merging genomes", "green", verbose)
+    conditional_output("\nMerging genomes", "green", verbose)
     genome_file_paths = glob.glob(f"{get_tmp_dir(savedir)}/faa/*.faa")
     output_file = f"{get_tmp_dir(savedir)}/merged_genomes.faa"
 
@@ -1002,7 +1002,7 @@ def run_emapper(savedir: str, ncpus: int, resource_log_file: str, lowmem: bool =
     bool
         True if emapper ran successfully or outputs already exist, False otherwise
     """
-    typer.secho("\n📊 Running emapper", fg="green")
+    typer.secho("\nRunning emapper", fg="green")
 
 
     final_emapper_annotation_file = f"{savedir}/emapper_out.emapper.annotations"
@@ -2088,7 +2088,7 @@ def create_ko_matrix_from_emapper_annotation(emapper_file_path: str, output_file
     - Removes 'ko:' prefixes and weight annotations like '(0.5)'
     - Skips rows with missing or '-' KO annotations
     """
-    typer.secho("\n📊 Creating KO matrix from eggNOG-mapper annotations", fg="green")
+    typer.secho("\nCreating KO matrix from eggNOG-mapper annotations", fg="green")
 
 
     if os.path.exists(output_file_path):
@@ -2587,7 +2587,7 @@ def run_kpct_parallel(kpct_input_file: str, savedir: str, kpct_outprefix: str, n
         if logger:
             logger.info(f"Running KPCT in parallel with up to {n_chunks} chunks using {ncpus} CPU cores")
 
-        typer.secho(f"🔧 Running KPCT in parallel with up to {n_chunks} chunks", fg="yellow")
+        typer.secho(f"Running KPCT in parallel with up to {n_chunks} chunks", fg="yellow")
 
 
         chunks_base_dir = os.path.join(get_tmp_dir(savedir), "kpct_chunk_outputs")
@@ -2667,7 +2667,7 @@ def run_kpct_parallel(kpct_input_file: str, savedir: str, kpct_outprefix: str, n
         else:
             if logger:
                 logger.info(f"Processing {len(chunks_to_process)} remaining chunks")
-            typer.secho(f"🔧 Processing {len(chunks_to_process)} remaining chunks", fg="yellow")
+            typer.secho(f"Processing {len(chunks_to_process)} remaining chunks", fg="yellow")
 
 
             failed_chunks = []
@@ -2962,7 +2962,7 @@ def _run_pipeline_core(genomedir: str, savedir: str, ncpus: int, adapt_headers: 
     start_time = time.time()
 
     greetings(verbose)
-    conditional_output("\n📋 Initializing pipeline...", "green", verbose)
+    conditional_output("\nInitializing pipeline...", "green", verbose)
 
     # Convert to absolute paths
     genomedir = os.path.abspath(genomedir)
@@ -2990,7 +2990,7 @@ def _run_pipeline_core(genomedir: str, savedir: str, ncpus: int, adapt_headers: 
         return
 
     # Validate input genomes
-    conditional_output(f"🔍 Checking genome directory: {genomedir}", "yellow", verbose)
+    conditional_output(f"Checking genome directory: {genomedir}", "yellow", verbose)
     how_many_genomes(genomedir, verbose)
     n_genomes = len(get_path_to_each_genome(genomedir))
     logger.info(f"Found {n_genomes} genome files in {genomedir}")
@@ -3191,7 +3191,7 @@ def analyze_ko_matrix(
         logger.info(f"Resource monitoring enabled. Log file: {resource_log_file}")
 
     greetings(verbose)
-    conditional_output("\n📋 Initializing KO matrix analysis...", "green", verbose)
+    conditional_output("\nInitializing KO matrix analysis...", "green", verbose)
 
 
     if not os.path.exists(kos_matrix):
