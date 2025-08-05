@@ -302,20 +302,7 @@ def run_subprocess_with_resource_monitoring(
         Return code, stdout, and stderr as strings
     """
     # Create time format string for detailed resource monitoring
-    time_format = (
-        "Command: %C\n"
-        "Elapsed Time (wall clock): %E\n"
-        "Elapsed Time (seconds): %e\n"
-        "User Time (seconds): %U\n"
-        "System Time (seconds): %S\n"
-        "CPU Percentage: %P\n"
-        "Maximum RAM (KB): %M\n"
-        "Exit Status: %x\n"
-        "Major Page Faults: %F\n"
-        "Minor Page Faults: %R\n"
-        "Context Switches (voluntary): %w\n"
-        "Context Switches (involuntary): %c\n"
-    )
+    time_format = "Command: %C\\nElapsed Time (wall clock): %E\\nElapsed Time (seconds): %e\\nUser Time (seconds): %U\\nSystem Time (seconds): %S\\nCPU Percentage: %P\\nMaximum RAM (KB): %M\\nExit Status: %x\\nMajor Page Faults: %F\\nMinor Page Faults: %R\\nContext Switches (voluntary): %w\\nContext Switches (involuntary): %c\\n"
 
     # Create temporary file for time output
     temp_time_file = f"{resource_log_file}.tmp"
@@ -337,8 +324,9 @@ def run_subprocess_with_resource_monitoring(
     start_time = datetime.datetime.now()
 
     # Run the command with the existing subprocess function but with time wrapper
+    # Note: Pass None as logger to avoid logging the verbose time command
     returncode, stdout, stderr = run_subprocess_with_logging(
-        time_cmd, logger, description, verbose
+        time_cmd, None, description, verbose
     )
 
     end_time = datetime.datetime.now()
@@ -2882,9 +2870,7 @@ def pipeline(genomedir: str,
     SystemExit
         If required files are not found or processing steps fail
     """
-    start_time = time.time()
-
-    # Setup logging
+    # Setup logging first to capture everything
     logger = setup_logging(savedir)
 
     # Setup resource monitoring
@@ -2892,17 +2878,30 @@ def pipeline(genomedir: str,
     if logger:
         logger.info(f"Resource monitoring enabled. Log file: {resource_log_file}")
 
+    # Run the main pipeline logic
+    _run_pipeline_core(genomedir, savedir, ncpus, adapt_headers, del_tmp,
+                      calculate_complementarity, lowmem, verbose, logger, resource_log_file)
+
+
+def _run_pipeline_core(genomedir: str, savedir: str, ncpus: int, adapt_headers: bool,
+                      del_tmp: bool, calculate_complementarity: int, lowmem: bool,
+                      verbose: bool, logger: logging.Logger, resource_log_file: str) -> None:
+    """
+    Core pipeline logic separated for resource monitoring.
+    """
+    start_time = time.time()
+
     greetings(verbose)
     conditional_output("\n📋 Initializing pipeline...", "green", verbose)
 
-
+    # Convert to absolute paths
     genomedir = os.path.abspath(genomedir)
     savedir = os.path.abspath(savedir)
 
-
+    # Create output directory
     create_output_dir(savedir, verbose)
 
-
+    # Log pipeline parameters
     logger.info(f"Pipeline started with parameters:")
     logger.info(f"  - Genome directory: {genomedir}")
     logger.info(f"  - Output directory: {savedir}")
@@ -2912,7 +2911,7 @@ def pipeline(genomedir: str,
     logger.info(f"  - Calculate complementarity: {calculate_complementarity}")
     logger.info(f"  - Low memory mode: {lowmem}")
 
-
+    # Check if all outputs already exist
     if check_final_reports_exist(savedir, calculate_complementarity, logger):
         conditional_output("✅ [OK] All output files already exist. Skipping processing.", "green", verbose)
         if not del_tmp:
@@ -2920,47 +2919,43 @@ def pipeline(genomedir: str,
         logger.info("Pipeline skipped as all output files already exist")
         return
 
-
+    # Validate input genomes
     conditional_output(f"🔍 Checking genome directory: {genomedir}", "yellow", verbose)
     how_many_genomes(genomedir, verbose)
     n_genomes = len(get_path_to_each_genome(genomedir))
     logger.info(f"Found {n_genomes} genome files in {genomedir}")
 
-
+    # Create temporary directory
     create_tmp_dir(savedir, verbose)
     logger.info(f"Temporary directory created/verified")
 
-
-
+    # Define file paths
     emapper_annotation_file = f"{savedir}/emapper_out.emapper.annotations"
     tmp_emapper_output_dir = f"{get_tmp_dir(savedir)}/emapper_output"
     tmp_emapper_file = f"{tmp_emapper_output_dir}/emapper_out.emapper.annotations"
-
     ko_matrix_path = f"{savedir}/kos_matrix.csv"
 
-
+    # Process annotations and create KO matrix
     if os.path.exists(ko_matrix_path):
         logger.info(f"KO matrix already exists: {ko_matrix_path}")
         conditional_output(f"✅ [OK] Using existing KO matrix: {ko_matrix_path}", "white", verbose)
     else:
-
+        # Check for existing emapper annotations
         if os.path.exists(emapper_annotation_file):
             logger.info(f"Emapper annotations already exist: {emapper_annotation_file}")
             conditional_output(f"✅ [OK] Using existing emapper annotations: {emapper_annotation_file}", "white", verbose)
         elif os.path.exists(tmp_emapper_file):
             logger.info(f"Emapper annotations found in temp directory: {tmp_emapper_file}")
             conditional_output(f"✅ [OK] Using existing emapper annotations from temp directory", "white", verbose)
-
+            # Copy to final location
             try:
                 shutil.copy(tmp_emapper_file, emapper_annotation_file)
                 logger.info(f"Copied emapper annotations to: {emapper_annotation_file}")
             except Exception as e:
                 logger.warning(f"Failed to copy emapper annotations: {str(e)}")
         else:
-
-
-
-
+            # Need to run the full annotation pipeline
+            # Prepare genome files
             if adapt_headers:
                 logger.info("Starting to adapt fasta headers")
                 adapt_fasta_headers(genomedir, savedir, verbose)
@@ -2970,7 +2965,7 @@ def pipeline(genomedir: str,
                 copy_faa_to_tmp(genomedir, savedir, verbose)
                 logger.info("Completed copying FAA files")
 
-
+            # Merge genomes
             logger.info("Starting genome merging")
             merge_success = merge_genomes(savedir, logger, verbose)
             if not merge_success:
@@ -2978,7 +2973,7 @@ def pipeline(genomedir: str,
                 typer.secho("❌ [ERROR] Failed to merge genomes. Exiting pipeline.", fg="red")
                 return
 
-
+            # Run eggNOG-mapper
             logger.info(f"Starting eMapper with {ncpus} CPUs")
             emapper_success = run_emapper(savedir, ncpus, resource_log_file, lowmem, logger, verbose)
             if not emapper_success:
@@ -2986,29 +2981,23 @@ def pipeline(genomedir: str,
                 typer.secho("❌ [ERROR] Failed to run emapper. Exiting pipeline.", fg="red")
                 return
 
-
-
-
-
+        # Create KO matrix from annotations
         logger.info(f"Creating KO matrix from eMapper annotations: {emapper_annotation_file}")
         create_ko_matrix_from_emapper_annotation(emapper_annotation_file, ko_matrix_path, logger)
         logger.info(f"KO matrix created: {ko_matrix_path}")
 
-
-
-
-
+    # Process module completeness
     module_completeness_file = f"{savedir}/module_completeness.tsv"
 
     if os.path.exists(module_completeness_file):
         logger.info(f"Module completeness matrix already exists: {module_completeness_file}")
         typer.secho(f"✅ [OK] Using existing module completeness matrix: {module_completeness_file}", fg="white")
     else:
-
+        # Set up KPCT processing
         kpct_outprefix = "output_give_completeness"
         kpct_input_file = os.path.join(savedir, "ko_file_for_kpct.txt")
 
-
+        # Check if KPCT output already exists
         possible_kpct_files = [
             os.path.join(savedir, f"{kpct_outprefix}_contigs.with_weights.tsv"),
             os.path.join(savedir, f"{kpct_outprefix}_pathways.with_weights.tsv"),
@@ -3017,7 +3006,7 @@ def pipeline(genomedir: str,
         ]
         kpct_file_exists = any(os.path.exists(f) for f in possible_kpct_files)
 
-
+        # Convert KO matrix to KPCT format if needed
         if not os.path.exists(kpct_input_file):
             logger.info(f"Converting KO matrix to KPCT format: {ko_matrix_path}")
             ko_matrix_to_kpct_format(ko_matrix_path, savedir, calculate_complementarity, logger)
@@ -3025,13 +3014,13 @@ def pipeline(genomedir: str,
             logger.info(f"KPCT input file already exists: {kpct_input_file}")
             typer.secho(f"✅ [OK] Using existing KPCT input file: {kpct_input_file}", fg="white")
 
-
+        # Run KPCT if needed
         if not kpct_file_exists:
-
+            # Check KPCT installation
             if not check_kpct_installed(logger):
                 return
 
-
+            # Run KPCT with parallel processing
             logger.info(f"Running KPCT with parallel processing on file: {kpct_input_file}")
             kpct_success = run_kpct_with_fallback(kpct_input_file, savedir, kpct_outprefix, ncpus, resource_log_file, logger)
             if not kpct_success:
@@ -3040,15 +3029,15 @@ def pipeline(genomedir: str,
             logger.info(f"KPCT output file(s) already exist with prefix '{kpct_outprefix}'")
             typer.secho(f"✅ [OK] Using existing KPCT output files with prefix '{kpct_outprefix}'", fg="white")
 
-
+        # Create module completeness matrix
         logger.info(f"Creating module completeness matrix")
         create_module_completeness_matrix(savedir, kpct_outprefix, logger)
 
-
+    # Generate complementarity reports if requested
     if calculate_complementarity >= 2:
         logger.info(f"Generating complementarity reports for up to {calculate_complementarity}-member combinations")
 
-
+        # Generate reports for each combination size
         for n_members in range(2, calculate_complementarity + 1):
             complementarity_report_file = f"{savedir}/module_completeness_complementarity_{n_members}member.tsv"
             if os.path.exists(complementarity_report_file):
@@ -3058,10 +3047,7 @@ def pipeline(genomedir: str,
                 logger.info(f"Generating complementarity report for {n_members}-member combinations")
                 generate_complementarity_report(savedir, n_members, logger)
 
-
-
-
-
+    # Clean up temporary files if requested
     if del_tmp:
         logger.info("Cleaning up temporary files")
         remove_temp_files(savedir, logger)
