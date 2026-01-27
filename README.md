@@ -13,42 +13,68 @@
 - Tracks and reports the actual proteins that are responsible for the completion of the module in the combination of N genomes.
 - **Automatic resource monitoring** with timestamped logs tracking CPU usage, memory consumption, and runtime for reproducibility.
 
-## Installation
+## Installation (Recommended)
 
-`moducomp` uses [Pixi](https://pixi.sh/) for managing dependencies and environment setup. Pixi ensures that you have a consistent and reproducible environment.
-
-1.  **Install Pixi**:
-If you don't have Pixi installed, follow the instructions on the [official Pixi website](https://pixi.sh/latest/#installation).
+Make sure you have [`Pixi`](https://pixi.prefix.dev/latest/) installed:
 
 ```bash
 curl -fsSL https://pixi.sh/install.sh | sh
 ```
 
-2.  **Clone the Repository** (if you haven't already):
+Install `moducomp` with `Pixi`:
+
+```bash
+pixi global install \
+  -c conda-forge \
+  -c bioconda \
+  -c https://repo.prefix.dev/astrogenomics \
+  moducomp
+```
+
+## Setup data (required)
+
+`moducomp` needs the eggNOG-mapper database to run. Download it once:
+
+```bash
+export EGGNOG_DATA_DIR="/path/to/eggnog-data"
+moducomp download-eggnog-data --eggnog-data-dir "$EGGNOG_DATA_DIR"
+# or the standalone script:
+# download_eggnog_data.py
+```
+
+If `EGGNOG_DATA_DIR` is not set, `moducomp download-eggnog-data` defaults to `${XDG_DATA_HOME:-~/.local/share}/moducomp/eggnog`.
+
+### Quick test
+
+Small test data sets ship with `moducomp`. After installation you can confirm the pipeline by running:
+
+```bash
+moducomp test --ncpus 2 --eggnog-data-dir "$EGGNOG_DATA_DIR"
+```
+
+### Developer install (Pixi)
+
+If you want to download the code and develop locally:
+
 ```bash
 git clone https://github.com/NeLLi-team/moducomp.git
 cd moducomp
-```
-
-3.  **Install Dependencies using Pixi**:
-Navigate to the project's root directory (where `pyproject.toml` is located) and run:
-```bash
 pixi install
 ```
-This command will read the `pyproject.toml` file, resolve the dependencies (including Python, eggNOG-mapper, kegg-pathways-completeness-tool, pandas, etc.), and set up a local environment in a `.pixi` subdirectory.
 
-*Note on eggNOG-mapper data*: download the EggNOG-mapper DB that is required for functional annotation. This can be a large download and may take time. Ensure you have sufficient disk space and an internet connection:
+## Quick check
 
 ```bash
-pixi shell
-export EGGNOG_DATA_DIR="/path/to/datadir/to/store/eggnog-db"
-download_eggnog_data.py
+moducomp --help
 ```
 
-Alternatively, you can configure eggNOG-mapper to use a pre-downloaded database.
+If you are running from the repository with `Pixi`:
+
 ```bash
-export EGGNOG_DATA_DIR="/path/to/datadir/to/store/eggnog-db"
+pixi run python -m moducomp --help
 ```
+
+You should see the command line help without errors.
 
 ## Usage
 
@@ -76,39 +102,12 @@ export EGGNOG_DATA_DIR="/path/to/datadir/to/store/eggnog-db"
 
 `moducomp` is specifically designed for large scale analysis of microbiomes with hundreds of members, and works on Linux systems with at least **64GB of RAM**. Nevertheless, it can be run on **smaller systems with less RAM, using the flag `--lowmem` when running the `pipeline` command**.
 
-To activate the Pixi environment shell:
-```bash
-pixi shell
-```
-Once in the shell, you can run `python -m moducomp --help` for a full list of commands and options.
-
-
-
-### Quick test (bundled data)
-
-`moducomp` ships with a small FAA test dataset inside the package. Run:
-
-```bash
-pixi shell
-python -m moducomp test --ncpus 4 --eggnog-data-dir "$EGGNOG_DATA_DIR"
-# or if installed with pixi global:
-# moducomp test --ncpus 4 --eggnog-data-dir "$EGGNOG_DATA_DIR"
-```
+### Notes on bundled test data
 
 You can override the bundled data location with `MODUCOMP_DATA_DIR`.
-`moducomp test` still requires eggNOG-mapper and its database (`EGGNOG_DATA_DIR`), or pass `--eggnog-data-dir`.
 When working from source, the bundled test genomes live at `moducomp/data/test_genomes`.
 
-To download the eggNOG data:
-
-```bash
-download_eggnog_data.py
-# or via moducomp:
-moducomp download-eggnog-data --eggnog-data-dir "$EGGNOG_DATA_DIR"
-```
-
 `download_eggnog_data.py` is provided by eggnog-mapper and is available in the Pixi environment (or via `pixi global` installs).
-If `EGGNOG_DATA_DIR` is not set, `moducomp download-eggnog-data` defaults to `${XDG_DATA_HOME:-~/.local/share}/moducomp/eggnog`.
 
 Pixi task (supports passing a custom location):
 
@@ -123,24 +122,16 @@ Global install shortcut (also supports `--eggnog-data-dir`):
 download-eggnog-data --eggnog-data-dir /path/to/eggnog-data
 ```
 
-### Pixi global install (quick start)
-
-```bash
-pixi global install -c conda-forge -c bioconda moducomp
-download-eggnog-data --eggnog-data-dir "$EGGNOG_DATA_DIR"
-moducomp test --ncpus 2 --eggnog-data-dir "$EGGNOG_DATA_DIR"
-```
-
 ### Running with your samples
+
+If you are running from the repository with `Pixi`, replace `moducomp` below with `pixi run python -m moducomp`.
 
 #### `pipeline` command
 
 Use the `pipeline` command to process a directory of genome FAA files from scratch.
 
 ```bash
-pixi shell
-
-python -m moducomp pipeline \
+moducomp pipeline \
     /path/to/your/faa_files \
     /path/to/your/output_directory \
     --ncpus <number_of_cpus_to_use> \
@@ -160,9 +151,7 @@ Use the `analyze-ko-matrix` command if you already have a KO matrix file (CSV fo
 The KO matrix file should have a `taxon_oid` column for genome identifiers, and subsequent columns for each KO (e.g., `K00001`, `K00002`) with integer counts.
 
 ```bash
-pixi shell
-
-python -m moducomp analyze-ko-matrix \
+moducomp analyze-ko-matrix \
     /path/to/your/kos_matrix.csv \
     /path/to/your/output_directory \
     --ncpus <number_of_cpus_to_use> \
@@ -196,13 +185,13 @@ When using the `--ncpus` parameter with a value greater than 1, `moducomp` autom
 
 ```bash
 # For large datasets with sufficient resources
-python -m moducomp pipeline ./large_genome_collection ./output_large --ncpus 32 --calculate-complementarity 3
+moducomp pipeline ./large_genome_collection ./output_large --ncpus 32 --calculate-complementarity 3
 
 # For moderate datasets with verbose output
-python -m moducomp analyze-ko-matrix ./ko_matrix.csv ./output_moderate --ncpus 16 --calculate-complementarity 2 --verbose
+moducomp analyze-ko-matrix ./ko_matrix.csv ./output_moderate --ncpus 16 --calculate-complementarity 2 --verbose
 
 # For systems with limited memory
-python -m moducomp pipeline ./genomes ./output_lowmem --ncpus 8 --lowmem --calculate-complementarity 2
+moducomp pipeline ./genomes ./output_lowmem --ncpus 8 --lowmem --calculate-complementarity 2
 ```
 
 ## Output files
