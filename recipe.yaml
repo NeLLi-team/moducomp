@@ -1,0 +1,48 @@
+context:
+  version: 0.6.0
+
+package:
+  name: moducomp
+  version: ${{ version }}
+
+source:
+- url: https://pypi.org/packages/source/m/moducomp/moducomp-${{ version }}.tar.gz
+  sha256: 0000000000000000000000000000000000000000000000000000000000000000
+
+build:
+  script:
+    - ${{ PYTHON }} -m pip install .
+  python:
+    entry_points:
+    - moducomp = moducomp.moducomp:app
+  noarch: python
+
+requirements:
+  host:
+  - python >=3.9,<3.12
+  - flit >=3.2,<4
+  - pip
+  run:
+  - python >=3.9,<3.12
+  - typer >=0.9.1,<0.10.0
+  - pandas >=1.5,<2.3
+  - click ~=8.0.0
+  - eggnog-mapper >=2.1.9,<2.2.0
+  - kegg-pathways-completeness
+
+tests:
+- python:
+    imports:
+    - moducomp
+    pip_check: true
+
+about:
+  summary: "moducomp: metabolic module completeness and complementarity in microbiomes"
+  description: |-
+    # moducomp
+
+    moducomp is a bioinformatics pipeline for metabolic module completeness
+    and metabolic complementarity analysis in microbiomes. It annotates proteins
+    with eggNOG-mapper, maps KOs to KEGG modules, and reports completeness and
+    complementarity across genome combinations.
+  license: BSD-3-Clause

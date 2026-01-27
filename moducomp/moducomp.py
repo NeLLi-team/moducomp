@@ -20,7 +20,7 @@ The tool supports two main workflows:
 
 Author: Juan C. Villada - US DOE Joint Genome Institute - Lawrence Berkeley National Lab
 License: See LICENSE.txt
-Version: See pixi.toml for current version
+Version: See moducomp.__version__ for current version
 """
 
 import datetime
@@ -29,12 +29,14 @@ import itertools
 import logging
 import os
 import queue
+import shlex
 import shutil
 import subprocess
 import sys
 import threading
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
 from sys import exit
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
@@ -42,6 +44,83 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Union
 import pandas as pd
 import typer
 
+def _data_roots() -> List[Path]:
+    roots: List[Path] = []
+    env_root = os.environ.get("MODUCOMP_DATA_DIR")
+    if env_root:
+        roots.append(Path(env_root))
+    module_dir = Path(__file__).resolve().parent
+    roots.append(module_dir / "data")
+    roots.append(module_dir.parent / "data")
+
+    unique: List[Path] = []
+    seen: Set[str] = set()
+    for root in roots:
+        key = str(root)
+        if key not in seen:
+            seen.add(key)
+            unique.append(root)
+    return unique
+
+
+def _data_candidates(*parts: str) -> List[Path]:
+    return [root.joinpath(*parts) for root in _data_roots()]
+
+
+def resolve_data_path(*parts: str) -> Path:
+    candidates = _data_candidates(*parts)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def require_data_path(*parts: str) -> Path:
+    candidates = _data_candidates(*parts)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    locations = ", ".join(str(path) for path in candidates)
+    raise FileNotFoundError(
+        f"Data resource not found: {Path(*parts)}. Looked in: {locations}"
+    )
+
+
+def require_eggnog_data_dir(eggnog_data_dir: Optional[str], logger: Optional[logging.Logger] = None) -> Path:
+    """Validate EGGNOG_DATA_DIR or a CLI override before running eggNOG-mapper."""
+    if eggnog_data_dir:
+        os.environ["EGGNOG_DATA_DIR"] = eggnog_data_dir
+
+    env_value = os.environ.get("EGGNOG_DATA_DIR", "")
+    if not env_value.strip():
+        message = (
+            "EGGNOG_DATA_DIR is required to run eggNOG-mapper. "
+            "Set the EGGNOG_DATA_DIR environment variable or pass --eggnog-data-dir. "
+            "Download the data with: download_eggnog_data.py or moducomp download-eggnog-data"
+        )
+        emit_error(message, logger)
+        raise typer.Exit(1)
+
+    data_dir = Path(env_value).expanduser().resolve()
+    if not data_dir.exists() or not data_dir.is_dir():
+        message = (
+            f"EGGNOG_DATA_DIR is not a valid directory: {data_dir}. "
+            "Download the data with: download_eggnog_data.py or moducomp download-eggnog-data"
+        )
+        emit_error(message, logger)
+        raise typer.Exit(1)
+
+    if not any(data_dir.iterdir()):
+        message = (
+            f"EGGNOG_DATA_DIR exists but appears empty: {data_dir}. "
+            "Download the data with: download_eggnog_data.py or moducomp download-eggnog-data"
+        )
+        emit_error(message, logger)
+        raise typer.Exit(1)
+
+    if logger:
+        logger.info("Using EGGNOG_DATA_DIR: %s", data_dir)
+    return data_dir
 def conditional_output(message: str, color: str = "white", verbose: bool = True) -> None:
     """
     Print message to terminal only if verbose mode is enabled.
@@ -57,6 +136,20 @@ def conditional_output(message: str, color: str = "white", verbose: bool = True)
     """
     if verbose:
         typer.secho(message, fg=color)
+
+def emit_error(message: str, logger: Optional[logging.Logger] = None) -> None:
+    """Log and emit an error to both stdout and stderr."""
+    if logger:
+        logger.error(message)
+    typer.secho(f"❌ [ERROR] {message}", fg="red", err=True)
+    typer.secho(f"❌ [ERROR] {message}", fg="red")
+
+
+def default_eggnog_data_dir() -> Path:
+    """Return a safe default location for eggNOG data downloads."""
+    xdg_home = os.environ.get("XDG_DATA_HOME")
+    base = Path(xdg_home).expanduser() if xdg_home else Path.home() / ".local" / "share"
+    return base / "moducomp" / "eggnog"
 
 def run_subprocess_with_logging(
     cmd: List[str],
@@ -88,10 +181,9 @@ def run_subprocess_with_logging(
     conditional_output(f"Running {description}", "yellow", verbose)
     conditional_output(f"   Command: {' '.join(cmd)}", "blue", verbose)
 
-    if verbose:
-        print(f"[DEBUG] Starting subprocess with command: {cmd[0]}")
-        print(f"[DEBUG] Working directory: {os.getcwd()}")
-        sys.stdout.flush()
+    if logger:
+        logger.debug("Starting subprocess: %s", " ".join(cmd))
+        logger.debug("Working directory: %s", os.getcwd())
 
     try:
         def stream_reader(stream, q, stream_type):
@@ -141,11 +233,8 @@ def run_subprocess_with_logging(
         last_output_time = time.time()
         progress_interval = 1800  # Show progress every 30 minutes
 
-        if verbose:
-            print(f"[DEBUG] Starting to monitor subprocess output...")
-            print(f"[DEBUG] Process PID: {process.pid}")
-            print(f"[DEBUG] Process poll status: {process.poll()}")
-            sys.stdout.flush()
+        if logger:
+            logger.debug("Monitoring subprocess output (PID: %s).", process.pid)
 
         # Read from queues and process output in real-time
         while process.poll() is None or not stdout_queue.empty() or not stderr_queue.empty():
@@ -160,8 +249,8 @@ def run_subprocess_with_logging(
                     # Stream to console immediately
                     if verbose:
                         print(line, flush=True)
-                        if len(stdout_lines) <= 3:  # Debug first few lines
-                            print(f"[DEBUG] Received stdout line {len(stdout_lines)}: {repr(line)}", flush=True)
+                    if logger:
+                        logger.debug("STDOUT: %s", line)
                     if logger:
                         logger.info(line)
                     last_output_time = current_time
@@ -176,9 +265,9 @@ def run_subprocess_with_logging(
                     stderr_lines.append(line)
                     # Stream to console immediately
                     if verbose:
-                        print(f"[STDERR] {line}", file=sys.stderr, flush=True)
-                        if len(stderr_lines) <= 3:  # Debug first few stderr lines
-                            print(f"[DEBUG] Received stderr line {len(stderr_lines)}: {repr(line)}", flush=True)
+                        print(line, file=sys.stderr, flush=True)
+                    if logger:
+                        logger.debug("STDERR: %s", line)
                     if logger:
                         logger.warning(line)
                     last_output_time = current_time
@@ -188,10 +277,9 @@ def run_subprocess_with_logging(
 
             # Show progress message if no output for a while
             if not output_received and current_time - last_output_time > progress_interval:
+                elapsed = int(current_time - last_output_time)
                 if verbose:
-                    elapsed = int(current_time - last_output_time)
                     print(f"   ... still running (no output for {elapsed}s)", flush=True)
-                    print(f"[DEBUG] Process status: {process.poll()}, PID: {process.pid}", flush=True)
                 if logger:
                     logger.info(f"Process still running, no output for {int(current_time - last_output_time)} seconds")
                 last_output_time = current_time
@@ -245,13 +333,13 @@ def run_subprocess_with_logging(
         return -1, "", str(e)
 
 
-def setup_resource_logging(savedir: str) -> str:
+def setup_resource_logging(log_dir: Union[str, Path]) -> str:
     """
     Set up resource usage logging file with timestamp.
 
     Parameters
     ----------
-    savedir : str
+    log_dir : str or Path
         Directory to save the resource log file
 
     Returns
@@ -259,8 +347,10 @@ def setup_resource_logging(savedir: str) -> str:
     str
         Path to the resource log file
     """
+    log_dir = Path(log_dir).expanduser().absolute()
+    log_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    resource_log_file = os.path.join(savedir, f"resource_usage_{timestamp}.log")
+    resource_log_file = str(log_dir / f"resource_usage_{timestamp}.log")
 
     # Create header for resource log file
     with open(resource_log_file, 'w') as f:
@@ -696,13 +786,15 @@ def format_protein_contributions(genome_id: str, contributions: Dict[str, List[s
 
 
 
-def setup_logging(savedir: str) -> logging.Logger:
+def configure_logging(log_level: str, log_dir: Union[str, Path]) -> logging.Logger:
     """
     Set up logging to both console and file.
 
     Parameters
     ----------
-    savedir : str
+    log_level : str
+        Logging level (DEBUG, INFO, WARNING, ERROR)
+    log_dir : str or Path
         Directory where log file will be saved
 
     Returns
@@ -710,35 +802,32 @@ def setup_logging(savedir: str) -> logging.Logger:
     logging.Logger
         Configured logger instance
     """
-    os.makedirs(savedir, exist_ok=True)
+    log_dir = Path(log_dir).expanduser().absolute()
+    log_dir.mkdir(parents=True, exist_ok=True)
 
-    log_file = os.path.join(savedir, f"moducomp_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
-    log_file_dir = os.path.dirname(log_file)
+    log_file = log_dir / "moducomp.log"
 
-    if not os.path.exists(log_file_dir):
-        os.makedirs(log_file_dir, exist_ok=True)
+    logger = logging.getLogger("ModuComp")
+    numeric_level = getattr(logging, log_level.upper(), logging.INFO)
+    logger.setLevel(numeric_level)
+    logger.handlers.clear()
 
+    formatter = logging.Formatter(
+        fmt="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
 
-    logger = logging.getLogger('moducomp')
-    logger.setLevel(logging.DEBUG)
-
-
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-
-
-    file_handler = logging.FileHandler(log_file)
+    file_handler = logging.FileHandler(log_file, encoding="utf-8")
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(formatter)
 
-
     console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
+    console_handler.setLevel(numeric_level)
     console_handler.setFormatter(formatter)
-
 
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
-
+    logger.debug("Logging initialised at level %s", logging.getLevelName(numeric_level))
     logger.info(f"Log file created at: {log_file}")
     return logger
 
@@ -2898,6 +2987,8 @@ def pipeline(genomedir: str,
              calculate_complementarity: int=0,
              lowmem: bool = typer.Option(False, "--lowmem", help="Run emapper with reduced memory footprint, omitting --dbmem flag."),
              verbose: bool = typer.Option(False, "--verbose", help="Enable verbose output with detailed progress information."),
+             log_level: str = typer.Option("INFO", "--log-level", "-l", help="Logging level (DEBUG, INFO, WARNING, ERROR)."),
+             eggnog_data_dir: Optional[str] = typer.Option(None, "--eggnog-data-dir", help="Path to eggNOG-mapper data directory (sets EGGNOG_DATA_DIR)."),
              ) -> None:
     """
     Run the ModuComp pipeline on a directory of genome files.
@@ -2933,28 +3024,41 @@ def pipeline(genomedir: str,
         only in combinations of N genomes but not in individuals, by default 0
     lowmem : bool, optional
         Run emapper with reduced memory footprint by omitting --dbmem flag, by default False
+    eggnog_data_dir : str, optional
+        Path to the eggNOG-mapper data directory (sets EGGNOG_DATA_DIR).
 
     Raises
     ------
     SystemExit
         If required files are not found or processing steps fail
     """
+    # Normalize paths early
+    genomedir = os.path.abspath(genomedir)
+    savedir = os.path.abspath(savedir)
+
     # Setup logging first to capture everything
-    logger = setup_logging(savedir)
+    log_dir = Path(savedir) / "logs"
+    logger = configure_logging(log_level, log_dir)
+    logger.info("Starting moducomp pipeline.")
+    logger.info("Genome directory: %s", genomedir)
+    logger.info("Output directory: %s", savedir)
+    logger.info("CLI command: %s", " ".join(shlex.quote(arg) for arg in sys.argv))
 
     # Setup resource monitoring
-    resource_log_file = setup_resource_logging(savedir)
+    resource_log_file = setup_resource_logging(log_dir)
     if logger:
         logger.info(f"Resource monitoring enabled. Log file: {resource_log_file}")
 
     # Run the main pipeline logic
     _run_pipeline_core(genomedir, savedir, ncpus, adapt_headers, del_tmp,
-                      calculate_complementarity, lowmem, verbose, logger, resource_log_file)
+                      calculate_complementarity, lowmem, verbose, logger, resource_log_file,
+                      eggnog_data_dir)
 
 
 def _run_pipeline_core(genomedir: str, savedir: str, ncpus: int, adapt_headers: bool,
                       del_tmp: bool, calculate_complementarity: int, lowmem: bool,
-                      verbose: bool, logger: logging.Logger, resource_log_file: str) -> None:
+                      verbose: bool, logger: logging.Logger, resource_log_file: str,
+                      eggnog_data_dir: Optional[str]) -> None:
     """
     Core pipeline logic separated for resource monitoring.
     """
@@ -3024,6 +3128,12 @@ def _run_pipeline_core(genomedir: str, savedir: str, ncpus: int, adapt_headers: 
                 logger.warning(f"Failed to copy emapper annotations: {str(e)}")
         else:
             # Need to run the full annotation pipeline
+            if shutil.which("emapper.py") is None:
+                message = "eggNOG-mapper executable (emapper.py) not found in PATH."
+                emit_error(message, logger)
+                return
+            require_eggnog_data_dir(eggnog_data_dir, logger)
+
             # Prepare genome files
             if adapt_headers:
                 logger.info("Starting to adapt fasta headers")
@@ -3129,6 +3239,169 @@ def _run_pipeline_core(genomedir: str, savedir: str, ncpus: int, adapt_headers: 
 
 
 @app.command()
+def test(
+    output_dir: Optional[str] = typer.Option(
+        None,
+        "--output-dir",
+        "-o",
+        help="Directory for test outputs. Defaults to output_test_moducomp_<DATETIME>.",
+    ),
+    ncpus: int = typer.Option(
+        2,
+        "--ncpus",
+        "-n",
+        min=1,
+        help="Number of CPU cores to use for the test run.",
+    ),
+    calculate_complementarity: int = typer.Option(
+        0,
+        "--calculate-complementarity",
+        "-c",
+        help="Complementarity size to compute during the test (0 disables).",
+    ),
+    adapt_headers: bool = typer.Option(
+        False,
+        "--adapt-headers",
+        help="Adapt FASTA headers before running the test pipeline.",
+    ),
+    del_tmp: bool = typer.Option(
+        True,
+        "--del-tmp/--keep-tmp",
+        help="Delete temporary files after the test completes.",
+    ),
+    lowmem: bool = typer.Option(
+        True,
+        "--lowmem/--fullmem",
+        help="Run emapper with reduced memory footprint during the test.",
+    ),
+    verbose: bool = typer.Option(
+        True,
+        "--verbose/--quiet",
+        help="Enable verbose output with detailed progress information.",
+    ),
+    log_level: str = typer.Option(
+        "INFO",
+        "--log-level",
+        "-l",
+        help="Logging level (DEBUG, INFO, WARNING, ERROR).",
+    ),
+    eggnog_data_dir: Optional[str] = typer.Option(
+        None,
+        "--eggnog-data-dir",
+        help="Path to eggNOG-mapper data directory (sets EGGNOG_DATA_DIR).",
+    ),
+) -> None:
+    """Run moducomp against the bundled test genomes."""
+    test_root = require_data_path("test_genomes")
+    if not test_root.is_dir():
+        raise NotADirectoryError(f"Test dataset path is not a directory: {test_root}")
+
+    if output_dir is None:
+        output_dir = f"output_test_moducomp_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+    genomedir = str(test_root)
+    savedir = os.path.abspath(output_dir)
+
+    log_dir = Path(savedir) / "logs"
+    logger = configure_logging(log_level, log_dir)
+    logger.info("Starting moducomp test run.")
+    logger.info("Test genomes: %s", test_root)
+    logger.info("CLI command: %s", " ".join(shlex.quote(arg) for arg in sys.argv))
+
+    resource_log_file = setup_resource_logging(log_dir)
+    logger.info("Resource monitoring enabled. Log file: %s", resource_log_file)
+
+    _run_pipeline_core(
+        genomedir,
+        savedir,
+        ncpus,
+        adapt_headers,
+        del_tmp,
+        calculate_complementarity,
+        lowmem,
+        verbose,
+        logger,
+        resource_log_file,
+        eggnog_data_dir,
+    )
+
+
+@app.command()
+def download_eggnog_data(
+    eggnog_data_dir: Optional[str] = typer.Option(
+        None,
+        "--eggnog-data-dir",
+        help="Destination directory for eggNOG-mapper data (sets EGGNOG_DATA_DIR).",
+    ),
+    log_level: str = typer.Option(
+        "INFO",
+        "--log-level",
+        "-l",
+        help="Logging level (DEBUG, INFO, WARNING, ERROR).",
+    ),
+    verbose: bool = typer.Option(
+        True,
+        "--verbose/--quiet",
+        help="Stream downloader output to the console.",
+    ),
+) -> None:
+    """Download eggNOG-mapper data using the bundled downloader."""
+    if eggnog_data_dir:
+        os.environ["EGGNOG_DATA_DIR"] = eggnog_data_dir
+
+    log_dir = Path.cwd() / "logs"
+    logger = configure_logging(log_level, log_dir)
+    logger.info("Starting eggNOG data download.")
+    logger.info("CLI command: %s", " ".join(shlex.quote(arg) for arg in sys.argv))
+
+    if eggnog_data_dir:
+        os.environ["EGGNOG_DATA_DIR"] = eggnog_data_dir
+
+    env_value = os.environ.get("EGGNOG_DATA_DIR", "").strip()
+    if not env_value:
+        default_dir = default_eggnog_data_dir()
+        os.environ["EGGNOG_DATA_DIR"] = str(default_dir)
+        env_value = str(default_dir)
+        typer.secho(
+            f"ℹ️ [INFO] EGGNOG_DATA_DIR not set; using default {env_value}",
+            fg="yellow",
+        )
+        logger.info("EGGNOG_DATA_DIR not set; using default %s", env_value)
+
+    data_dir = Path(env_value).expanduser().resolve()
+    data_dir.mkdir(parents=True, exist_ok=True)
+    logger.info("Downloading eggNOG data into %s", data_dir)
+
+    downloader = shutil.which("download_eggnog_data.py")
+    if downloader is None:
+        message = (
+            "download_eggnog_data.py not found in PATH. "
+            "Ensure eggnog-mapper is installed."
+        )
+        emit_error(message, logger)
+        raise typer.Exit(1)
+
+    returncode, _, _ = run_subprocess_with_logging(
+        [downloader],
+        logger=logger,
+        description="Downloading eggNOG data",
+        verbose=verbose,
+    )
+
+    if returncode != 0:
+        raise typer.Exit(returncode)
+
+
+def download_eggnog_data_cli() -> None:
+    """Entry point for the download-eggnog-data script."""
+    app(
+        prog_name="download-eggnog-data",
+        args=["download-eggnog-data", *sys.argv[1:]],
+    )
+
+
+
+@app.command()
 def analyze_ko_matrix(
     kos_matrix: str,
     savedir: str,
@@ -3137,6 +3410,7 @@ def analyze_ko_matrix(
     del_tmp: bool=True,
     ncpus: int=16,
     verbose: bool = typer.Option(False, "--verbose", help="Enable verbose output with detailed progress information."),
+    log_level: str = typer.Option("INFO", "--log-level", "-l", help="Logging level (DEBUG, INFO, WARNING, ERROR)."),
     ) -> None:
     """
     Run module completeness analysis on a pre-existing KO matrix file using the KEGG Pathways Completeness Tool (KPCT).
@@ -3181,13 +3455,17 @@ def analyze_ko_matrix(
     kos_matrix = os.path.abspath(kos_matrix)
     savedir = os.path.abspath(savedir)
 
-    # Setup logging
-    logger = setup_logging(savedir)
+    log_dir = Path(savedir) / "logs"
+    logger = configure_logging(log_level, log_dir)
 
     # Setup resource monitoring
-    resource_log_file = setup_resource_logging(savedir)
+    resource_log_file = setup_resource_logging(log_dir)
     if logger:
         logger.info(f"Resource monitoring enabled. Log file: {resource_log_file}")
+        logger.info("Starting moducomp KO matrix analysis.")
+        logger.info("KO matrix file: %s", kos_matrix)
+        logger.info("Output directory: %s", savedir)
+        logger.info("CLI command: %s", " ".join(shlex.quote(arg) for arg in sys.argv))
 
     greetings(verbose)
     conditional_output("\nInitializing KO matrix analysis...", "green", verbose)
@@ -3201,13 +3479,7 @@ def analyze_ko_matrix(
     if not os.path.exists(savedir):
         os.makedirs(savedir)
 
-
-    logger = setup_logging(savedir)
-
     if logger:
-        logger.info("Starting moducomp KO matrix analysis")
-        logger.info(f"KO matrix file: {kos_matrix}")
-        logger.info(f"Output directory: {savedir}")
         logger.info(f"Calculate complementarity: {calculate_complementarity}")
         logger.info(f"KPCT output prefix: {kpct_outprefix}")
         logger.info(f"CPU cores: {ncpus}")

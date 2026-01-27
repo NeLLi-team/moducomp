@@ -1,0 +1,59 @@
+[build-system]
+requires = ["flit_core >=3.2,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "moducomp"
+authors = [{ name = "Juan C. Villada", email = "jvillada@lbl.gov" }]
+readme = "README.md"
+license = { file = "LICENSE.txt" }
+keywords = ["bioinformatics", "microbiome", "metabolic", "kegg", "genomics"]
+requires-python = ">=3.9,<3.12"
+classifiers = [
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: POSIX :: Linux",
+]
+dependencies = [
+    "typer>=0.9.1,<0.10.0",
+    "pandas>=1.5,<2.3",
+    "click~=8.0.0",
+    "eggnog-mapper>=2.1.9,<2.2.0",
+    "kegg-pathways-completeness",
+]
+dynamic = ["version", "description"]
+
+[project.scripts]
+moducomp = "moducomp.moducomp:app"
+download-eggnog-data = "moducomp.moducomp:download_eggnog_data_cli"
+
+[project.urls]
+Homepage = "https://github.com/NeLLi-team/moducomp"
+Documentation = "https://github.com/NeLLi-team/moducomp#readme"
+Repository = "https://github.com/NeLLi-team/moducomp"
+"Bug Tracker" = "https://github.com/NeLLi-team/moducomp/issues"
+
+[tool.pixi.workspace]
+channels = ["conda-forge", "bioconda"]
+platforms = ["linux-64"]
+
+[tool.pixi.pypi-dependencies]
+moducomp = { path = ".", editable = true }
+
+[tool.pixi.dependencies]
+python = ">=3.9,<3.12"
+pandas = ">=1.5,<2.3"
+typer = ">=0.9.1,<0.10.0"
+click = "~=8.0.0"
+eggnog-mapper = ">=2.1.9,<2.2.0"
+kegg-pathways-completeness = "*"
+
+[tool.pixi.tasks]
+moducomp = "python -m moducomp --help"
+test = "python -m moducomp test --ncpus 2"
+download-eggnog-data = "python -m moducomp download-eggnog-data"
+pipeline = "python -m moducomp pipeline --help"
+analyze_ko_matrix = "python -m moducomp analyze-ko-matrix --help"
