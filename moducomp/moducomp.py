@@ -3122,21 +3122,55 @@ def run_kpct_with_fallback(
 app = typer.Typer()
 
 @app.command()
-def pipeline(genomedir: str,
-             savedir: str,
-             ncpus: int=16,
-             adapt_headers: bool=False,
-             del_tmp: bool=True,
-             calculate_complementarity: int=0,
+def pipeline(
+             genomedir: str = typer.Argument(
+                 ...,
+                 help="Directory containing genome FAA files.",
+             ),
+             savedir: str = typer.Argument(
+                 ...,
+                 help="Directory to write all outputs.",
+             ),
+             ncpus: int = typer.Option(
+                 16,
+                 "--ncpus",
+                 "-n",
+                 min=1,
+                 help="Number of CPU cores to use for eggNOG-mapper and KPCT.",
+             ),
+             adapt_headers: bool = typer.Option(
+                 False,
+                 "--adapt-headers/--no-adapt-headers",
+                 help="Adapt FASTA headers to genome|protein_N before running eggNOG-mapper.",
+             ),
+             del_tmp: bool = typer.Option(
+                 True,
+                 "--del-tmp/--keep-tmp",
+                 help="Delete temporary files after completion.",
+             ),
+             calculate_complementarity: int = typer.Option(
+                 0,
+                 "--calculate-complementarity",
+                 "-c",
+                 help="Complementarity size to compute (0 disables).",
+             ),
              lowmem: bool = typer.Option(
                  False,
                  "--lowmem/--fullmem",
                  "--low-mem/--full-mem",
-                 help="Run emapper with reduced memory footprint, omitting --dbmem flag.",
+                 help="Run eggNOG-mapper with reduced memory footprint by omitting --dbmem.",
              ),
-             verbose: bool = typer.Option(False, "--verbose", help="Enable verbose output with detailed progress information."),
+             verbose: bool = typer.Option(
+                 False,
+                 "--verbose/--quiet",
+                 help="Enable verbose output with detailed progress information.",
+             ),
              log_level: str = typer.Option("INFO", "--log-level", "-l", help="Logging level (DEBUG, INFO, WARNING, ERROR)."),
-             eggnog_data_dir: Optional[str] = typer.Option(None, "--eggnog-data-dir", help="Path to eggNOG-mapper data directory (sets EGGNOG_DATA_DIR)."),
+             eggnog_data_dir: Optional[str] = typer.Option(
+                 None,
+                 "--eggnog-data-dir",
+                 help="Path to eggNOG-mapper data directory (sets EGGNOG_DATA_DIR).",
+             ),
              ) -> None:
     """
     Run the ModuComp pipeline on a directory of genome files.
@@ -3428,7 +3462,7 @@ def test(
     ),
     adapt_headers: bool = typer.Option(
         False,
-        "--adapt-headers",
+        "--adapt-headers/--no-adapt-headers",
         help="Adapt FASTA headers before running the test pipeline.",
     ),
     del_tmp: bool = typer.Option(
@@ -3665,13 +3699,42 @@ def download_eggnog_data_cli() -> None:
 
 @app.command()
 def analyze_ko_matrix(
-    kos_matrix: str,
-    savedir: str,
-    calculate_complementarity: int=0,
-    kpct_outprefix: str="output_give_completeness",
-    del_tmp: bool=True,
-    ncpus: int=16,
-    verbose: bool = typer.Option(False, "--verbose", help="Enable verbose output with detailed progress information."),
+    kos_matrix: str = typer.Argument(
+        ...,
+        help="Path to KO matrix CSV/TSV file.",
+    ),
+    savedir: str = typer.Argument(
+        ...,
+        help="Directory to write outputs.",
+    ),
+    calculate_complementarity: int = typer.Option(
+        0,
+        "--calculate-complementarity",
+        "-c",
+        help="Complementarity size to compute (0 disables).",
+    ),
+    kpct_outprefix: str = typer.Option(
+        "output_give_completeness",
+        "--kpct-outprefix",
+        help="Prefix for KPCT output files.",
+    ),
+    del_tmp: bool = typer.Option(
+        True,
+        "--del-tmp/--keep-tmp",
+        help="Delete temporary files after completion.",
+    ),
+    ncpus: int = typer.Option(
+        16,
+        "--ncpus",
+        "-n",
+        min=1,
+        help="CPU cores for KPCT parallel processing.",
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose/--quiet",
+        help="Enable verbose output with detailed progress information.",
+    ),
     log_level: str = typer.Option("INFO", "--log-level", "-l", help="Logging level (DEBUG, INFO, WARNING, ERROR)."),
     ) -> None:
     """

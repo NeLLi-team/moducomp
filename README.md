@@ -12,6 +12,7 @@
 - Generation of complementarity reports highlighting modules completed through genome partnerships.
 - Tracks and reports the actual proteins that are responsible for the completion of the module in the combination of N genomes.
 - **Automatic resource monitoring** with timestamped logs tracking CPU usage, memory consumption, and runtime for reproducibility.
+- **Consistent logging to stdout/stderr** with a per-command resource summary emitted at the end of each run.
 
 ## Installation (Recommended)
 
@@ -82,6 +83,82 @@ You should see the command line help without errors.
 
 `moducomp` provides two main commands: `pipeline` and `analyze-ko-matrix`. You can run these commands using Pixi tasks defined in `pyproject.toml` or directly within the Pixi environment.
 
+### Pipeline overview
+
+The diagram below shows the main stages executed by ModuComp.
+
+```mermaid
+graph TD
+    A([Start run]) --> B[Initialize logging and resource monitoring]
+    B --> C{Input type}
+    C -->|pipeline| D[Validate genome directory]
+    C -->|analyze-ko-matrix| H[Load existing KO matrix]
+    D --> E[Prepare genomes: adapt headers or copy to tmp]
+    E --> F[Merge genomes into single FAA]
+    F --> G[Run eggNOG-mapper (if needed)]
+    G --> H[Create KO matrix (`kos_matrix.csv`)]
+    H --> I[Convert KO matrix to KPCT input]
+    I --> J[Run KPCT (parallel with fallback)]
+    J --> K[Create module completeness matrix]
+    K --> L{Complementarity requested?}
+    L -->|Yes| M[Generate complementarity report(s)]
+    L -->|No| N[Skip]
+    M --> O[Write outputs + logs]
+    N --> O
+    O --> P[Optional cleanup of `tmp/`]
+    P --> Q([Pipeline complete])
+```
+
+### CLI options and defaults
+
+This section lists all CLI options implemented today, along with their default values.
+
+#### `pipeline` command (positional args: `genomedir`, `savedir`)
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--ncpus`, `-n` | `16` | Number of CPU cores to use for eggNOG-mapper and KPCT. |
+| `--calculate-complementarity`, `-c` | `0` | Complementarity size to compute (0 disables). |
+| `--adapt-headers/--no-adapt-headers` | `false` | Adapt FASTA headers to `genome|protein_N`. |
+| `--del-tmp/--keep-tmp` | `true` | Delete temporary files after completion. |
+| `--lowmem/--fullmem` (`--low-mem/--full-mem`) | `fullmem` | Run eggNOG-mapper without `--dbmem` to reduce RAM. |
+| `--verbose/--quiet` | `false` | Enable verbose progress output. |
+| `--log-level`, `-l` | `INFO` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
+| `--eggnog-data-dir` | `EGGNOG_DATA_DIR` | Path to eggNOG-mapper data (sets `EGGNOG_DATA_DIR`). |
+
+#### `test` command (bundled test genomes)
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--output-dir`, `-o` | `output_test_moducomp_<DATETIME>` | Output directory for test run. |
+| `--ncpus`, `-n` | `2` | CPU cores for the test run. |
+| `--calculate-complementarity`, `-c` | `2` | Complementarity size to compute (0 disables). |
+| `--adapt-headers/--no-adapt-headers` | `false` | Adapt FASTA headers before the test. |
+| `--del-tmp/--keep-tmp` | `true` | Delete temporary files after the test completes. |
+| `--lowmem/--fullmem` (`--low-mem/--full-mem`) | `lowmem` | Low-memory mode is the default for tests. |
+| `--verbose/--quiet` | `verbose` | Verbose output is the default for tests. |
+| `--log-level`, `-l` | `INFO` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
+| `--eggnog-data-dir` | `EGGNOG_DATA_DIR` | Path to eggNOG-mapper data (sets `EGGNOG_DATA_DIR`). |
+
+#### `analyze-ko-matrix` command (positional args: `kos_matrix`, `savedir`)
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--calculate-complementarity`, `-c` | `0` | Complementarity size to compute (0 disables). |
+| `--kpct-outprefix` | `output_give_completeness` | Prefix for KPCT output files. |
+| `--del-tmp/--keep-tmp` | `true` | Delete temporary files after completion. |
+| `--ncpus`, `-n` | `16` | CPU cores for KPCT parallel processing. |
+| `--verbose/--quiet` | `false` | Enable verbose progress output. |
+| `--log-level`, `-l` | `INFO` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
+
+#### `download-eggnog-data` command
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--eggnog-data-dir` | `${XDG_DATA_HOME:-~/.local/share}/moducomp/eggnog` | Destination for eggNOG-mapper data (sets `EGGNOG_DATA_DIR`). |
+| `--log-level`, `-l` | `INFO` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
+| `--verbose/--quiet` | `verbose` | Stream downloader output to the console. |
+
 ### Performance and parallel processing
 
 `moducomp` includes **parallel processing capabilities** for the KPCT (KEGG Pathways Completeness Tool) analysis, which can significantly improve performance for large datasets:
@@ -141,7 +218,7 @@ moducomp pipeline \
     # Optional flags:
     # --lowmem/--fullmem          # Optional: Use low-mem if you have less than 64GB of RAM (default is full mem)
     # --adapt-headers             # If your FASTA headers need modification
-    # --del-tmp                   # To delete temporary files
+    # --del-tmp/--keep-tmp        # Delete or keep temporary files
     # --eggnog-data-dir /path     # If EGGNOG_DATA_DIR is not set
     # --verbose                   # Enable verbose output with detailed progress information
 ```
@@ -160,7 +237,7 @@ moducomp analyze-ko-matrix \
     --calculate-complementarity <N>  # 0 to disable, 2 for 2-member, 3 for 3-member complementarity.
 
     # Optional flags:
-    # --del-tmp false
+    # --keep-tmp                  # Keep temporary files
     # --verbose                   # Enable verbose output with detailed progress information
 ```
 
@@ -204,7 +281,7 @@ moducomp pipeline ./genomes ./output_lowmem --ncpus 8 --lowmem --calculate-compl
 - **`module_completeness.tsv`**: Module completeness scores for individual genomes and combinations
 - **`module_completeness_complementarity_Nmember.tsv`**: Complementarity reports (if requested)
 - **`logs/resource_usage_YYYYMMDD_HHMMSS.log`**: Resource monitoring log with CPU, memory, and runtime metrics for reproducibility
-- **`logs/moducomp.log`**: Detailed pipeline execution log
+- **`logs/moducomp.log`**: Detailed pipeline execution log with a per-command resource summary at the end of the run
 
 ## Citation
 Villada, JC. & Schulz, F. (2025). Assessment of metabolic module completeness of genomes and metabolic complementarity in microbiomes with `moducomp` . `moducomp` (v0.5.1) Zenodo. https://doi.org/10.5281/zenodo.16116092
