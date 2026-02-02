@@ -95,17 +95,17 @@ graph TD
     C -->|analyze-ko-matrix| H[Load existing KO matrix]
     D --> E[Prepare genomes: adapt headers or copy to tmp]
     E --> F[Merge genomes into single FAA]
-    F --> G[Run eggNOG-mapper (if needed)]
-    G --> H[Create KO matrix (`kos_matrix.csv`)]
+    F --> G[Run eggNOG-mapper if needed]
+    G --> H[Create KO matrix kos_matrix.csv]
     H --> I[Convert KO matrix to KPCT input]
-    I --> J[Run KPCT (parallel with fallback)]
+    I --> J[Run KPCT with parallel fallback]
     J --> K[Create module completeness matrix]
     K --> L{Complementarity requested?}
-    L -->|Yes| M[Generate complementarity report(s)]
+    L -->|Yes| M[Generate complementarity reports]
     L -->|No| N[Skip]
-    M --> O[Write outputs + logs]
+    M --> O[Write outputs and logs]
     N --> O
-    O --> P[Optional cleanup of `tmp/`]
+    O --> P[Optional cleanup of tmp]
     P --> Q([Pipeline complete])
 ```
 
