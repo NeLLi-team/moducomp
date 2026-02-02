@@ -53,7 +53,7 @@ kegg-pathways-completeness = "*"
 
 [tool.pixi.tasks]
 moducomp = "python -m moducomp --help"
-test = "python -m moducomp test --ncpus 2"
+test = "python -m moducomp test --ncpus 2 --calculate-complementarity 2"
 download-eggnog-data = "python -m moducomp download-eggnog-data"
 pipeline = "python -m moducomp pipeline --help"
 analyze_ko_matrix = "python -m moducomp analyze-ko-matrix --help"

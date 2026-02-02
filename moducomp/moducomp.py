@@ -3285,7 +3285,7 @@ def test(
         help="Number of CPU cores to use for the test run.",
     ),
     calculate_complementarity: int = typer.Option(
-        0,
+        2,
         "--calculate-complementarity",
         "-c",
         help="Complementarity size to compute during the test (0 disables).",
