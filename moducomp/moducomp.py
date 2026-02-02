@@ -134,7 +134,12 @@ def conditional_output(message: str, color: str = "white", verbose: bool = True)
     verbose : bool, optional
         Whether to display the message, by default True
     """
-    if verbose:
+    if not verbose:
+        return
+    logger = logging.getLogger("ModuComp")
+    if logger.handlers:
+        logger.info(message)
+    else:
         typer.secho(message, fg=color)
 
 def emit_error(message: str, logger: Optional[logging.Logger] = None) -> None:
@@ -207,10 +212,10 @@ def run_subprocess_with_logging(
     """
     if logger:
         logger.info(f"{description}: {' '.join(cmd)}")
-
-    # Only show detailed command info in verbose mode
-    conditional_output(f"Running {description}", "yellow", verbose)
-    conditional_output(f"   Command: {' '.join(cmd)}", "blue", verbose)
+    else:
+        # Only show detailed command info in verbose mode when no logger is configured
+        conditional_output(f"Running {description}", "yellow", verbose)
+        conditional_output(f"   Command: {' '.join(cmd)}", "blue", verbose)
 
     if logger:
         logger.debug("Starting subprocess: %s", " ".join(cmd))
@@ -385,10 +390,9 @@ def setup_resource_logging(log_dir: Union[str, Path]) -> str:
 
     # Create header for resource log file
     with open(resource_log_file, 'w') as f:
-        f.write("# ModuComp Resource Usage Report\n")
+        f.write("# moducomp resource usage log\n")
         f.write(f"# Generated on: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write("# Format: Timestamp | Command | Elapsed_Time(s) | User_Time(s) | System_Time(s) | CPU_Percent | Max_RAM(GB) | Exit_Code\n")
-        f.write("#" + "="*120 + "\n\n")
+        f.write("# Format: Timestamp | Command | Elapsed_Time(s) | User_Time(s) | System_Time(s) | CPU_Percent | Max_RAM(GB) | Exit_Code\n\n")
 
     return resource_log_file
 
@@ -437,9 +441,9 @@ def run_subprocess_with_resource_monitoring(
     if logger:
         logger.info(f"{description}: {' '.join(cmd)}")
         logger.info(f"Resource monitoring enabled, output will be logged to: {resource_log_file}")
-
-    conditional_output(f"Running {description} (with resource monitoring)", "yellow", verbose)
-    conditional_output(f"   Command: {' '.join(cmd)}", "blue", verbose)
+    else:
+        conditional_output(f"Running {description} (with resource monitoring)", "yellow", verbose)
+        conditional_output(f"   Command: {' '.join(cmd)}", "blue", verbose)
 
     start_time = datetime.datetime.now()
 
@@ -541,16 +545,14 @@ def log_final_resource_summary(resource_log_file: str, total_start_time: float, 
     end_time = datetime.datetime.now()
 
     with open(resource_log_file, 'a') as f:
-        f.write("\n" + "="*120 + "\n")
-        f.write("# PIPELINE SUMMARY\n")
-        f.write(f"# Pipeline completed at: {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"# Total pipeline elapsed time: {total_elapsed:.2f} seconds ({total_elapsed/60:.2f} minutes)\n")
-        f.write("="*120 + "\n")
+        f.write("\nFinal resource usage summary\n")
+        f.write(f"Pipeline completed at: {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Total pipeline elapsed time: {total_elapsed:.2f} seconds ({total_elapsed/60:.2f} minutes)\n")
 
     if verbose:
-        conditional_output("\nResource Usage Summary Logged", "green", verbose)
-        conditional_output(f"   Full report saved to: {resource_log_file}", "cyan", verbose)
-        conditional_output(f"   Total pipeline time: {total_elapsed:.2f}s ({total_elapsed/60:.2f}min)", "white", verbose)
+        conditional_output("Resource usage summary saved.", "green", verbose)
+        conditional_output(f"Resource log: {resource_log_file}", "white", verbose)
+        conditional_output(f"Total pipeline time: {total_elapsed:.2f}s ({total_elapsed/60:.2f}min)", "white", verbose)
 
     if logger:
         logger.info(f"Resource usage summary completed. Total time: {total_elapsed:.2f}s")
@@ -604,24 +606,18 @@ def display_pipeline_completion_summary(start_time: float, savedir: str, logger:
         output_files.append(f"{complementarity_files} complementarity report(s)")
 
     if verbose:
-        conditional_output("\n" + "="*80, "green", verbose)
-        conditional_output("MODUCOMP PIPELINE COMPLETED SUCCESSFULLY!", "green", verbose)
-        conditional_output("="*80, "green", verbose)
+        conditional_output("Pipeline completed.", "green", verbose)
         conditional_output(f"Total execution time: {time_str} ({total_elapsed:.2f} seconds)", "white", verbose)
-        conditional_output(f"Output directory: {savedir}", "cyan", verbose)
+        conditional_output(f"Output directory: {savedir}", "white", verbose)
         conditional_output(f"Generated files: {', '.join(output_files) if output_files else 'None'}", "white", verbose)
         conditional_output(f"Completed at: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", "white", verbose)
-        conditional_output("="*80, "green", verbose)
 
     if logger:
-        logger.info("="*80)
-        logger.info("MODUCOMP PIPELINE COMPLETED SUCCESSFULLY!")
-        logger.info("="*80)
+        logger.info("Pipeline completed.")
         logger.info(f"Total execution time: {time_str} ({total_elapsed:.2f} seconds)")
         logger.info(f"Output directory: {savedir}")
         logger.info(f"Generated files: {', '.join(output_files) if output_files else 'None'}")
         logger.info(f"Completed at: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        logger.info("="*80)
 
 
 def parse_emapper_annotations(emapper_file_path: str, logger: Optional[logging.Logger] = None) -> Dict[str, Dict[str, List[str]]]:
@@ -3119,7 +3115,7 @@ def _run_pipeline_core(genomedir: str, savedir: str, ncpus: int, adapt_headers: 
     if check_final_reports_exist(savedir, calculate_complementarity, logger):
         conditional_output("OK: All output files already exist. Skipping processing.", "green", verbose)
         if not del_tmp:
-            conditional_output("INFO: Keeping temporary files as requested.", "blue", verbose)
+            conditional_output("Keeping temporary files as requested.", "blue", verbose)
         logger.info("Pipeline skipped as all output files already exist")
         return
 
@@ -3390,10 +3386,6 @@ def download_eggnog_data(
         default_dir = default_eggnog_data_dir()
         os.environ["EGGNOG_DATA_DIR"] = str(default_dir)
         env_value = str(default_dir)
-        typer.secho(
-            f"INFO: EGGNOG_DATA_DIR not set; using default {env_value}",
-            fg="yellow",
-        )
         logger.info("EGGNOG_DATA_DIR not set; using default %s", env_value)
 
     data_dir = Path(env_value).expanduser().resolve()
@@ -3412,9 +3404,6 @@ def download_eggnog_data(
     # Run the downloader with progress updates based on data directory growth.
     cmd = [downloader]
     logger.info("Downloading eggNOG data: %s", downloader)
-    if verbose:
-        typer.secho("Running download_eggnog_data.py", fg="yellow")
-        typer.secho(f"   Command: {' '.join(cmd)}", fg="blue")
 
     start_time = time.time()
     last_progress_time = start_time
@@ -3496,8 +3485,6 @@ def download_eggnog_data(
                     f"{format_bytes(speed)}/s, +{file_delta} files)"
                 )
                 logger.info(msg)
-                if verbose:
-                    typer.secho(msg, fg="cyan")
                 last_size = current_size
                 last_files = current_files
                 last_progress_time = now
