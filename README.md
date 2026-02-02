@@ -49,7 +49,7 @@ If `EGGNOG_DATA_DIR` is not set, `moducomp download-eggnog-data` defaults to `${
 Small test data sets ship with `moducomp`. After installation you can confirm the pipeline by running:
 
 ```bash
-moducomp test --ncpus 2 --eggnog-data-dir "$EGGNOG_DATA_DIR"
+moducomp test --ncpus 16 --eggnog-data-dir "$EGGNOG_DATA_DIR"
 ```
 
 ### Developer install (Pixi)
