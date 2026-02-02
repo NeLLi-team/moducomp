@@ -44,6 +44,57 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Union
 import pandas as pd
 import typer
 
+RESOURCE_SUMMARIES: List[Dict[str, Any]] = []
+
+
+def _get_logger() -> logging.Logger:
+    return logging.getLogger("ModuComp")
+
+
+def _log_lines(logger: logging.Logger, message: Union[str, List[str]], level: int = logging.INFO) -> None:
+    if isinstance(message, (list, tuple)):
+        lines = message
+    else:
+        lines = str(message).splitlines()
+    for line in lines:
+        if line.strip():
+            logger.log(level, line)
+
+
+def _log_or_print(
+    message: str,
+    logger: Optional[logging.Logger] = None,
+    level: int = logging.INFO,
+    color: str = "white",
+    err: bool = False,
+    verbose: bool = True,
+    force: bool = False,
+) -> None:
+    logger = logger or _get_logger()
+    has_handlers = bool(getattr(logger, "handlers", []))
+
+    if level < logging.WARNING and not verbose and not force:
+        if has_handlers:
+            _log_lines(logger, message, logging.DEBUG)
+        return
+
+    if has_handlers:
+        _log_lines(logger, message, level)
+    else:
+        typer.secho(message, fg=color, err=err)
+
+
+def log_info(message: str, logger: Optional[logging.Logger] = None) -> None:
+    _log_or_print(message, logger=logger, level=logging.INFO, color="white", err=False, force=True)
+
+
+def log_warning(message: str, logger: Optional[logging.Logger] = None) -> None:
+    _log_or_print(message, logger=logger, level=logging.WARNING, color="yellow", err=True, force=True)
+
+
+def log_error(message: str, logger: Optional[logging.Logger] = None) -> None:
+    _log_or_print(message, logger=logger, level=logging.ERROR, color="red", err=True, force=True)
+
 def _data_roots() -> List[Path]:
     roots: List[Path] = []
     env_root = os.environ.get("MODUCOMP_DATA_DIR")
@@ -123,31 +174,22 @@ def require_eggnog_data_dir(eggnog_data_dir: Optional[str], logger: Optional[log
     return data_dir
 def conditional_output(message: str, color: str = "white", verbose: bool = True) -> None:
     """
-    Print message to terminal only if verbose mode is enabled.
+    Emit a progress message with optional verbosity gating.
 
     Parameters
     ----------
     message : str
         Message to display
     color : str, optional
-        Color for the message, by default "white"
+        Color for the message when falling back to console output
     verbose : bool, optional
-        Whether to display the message, by default True
+        Whether to display the message at INFO level (otherwise DEBUG)
     """
-    if not verbose:
-        return
-    logger = logging.getLogger("ModuComp")
-    if logger.handlers:
-        logger.info(message)
-    else:
-        typer.secho(message, fg=color)
+    _log_or_print(message, level=logging.INFO, color=color, err=False, verbose=verbose, force=False)
 
 def emit_error(message: str, logger: Optional[logging.Logger] = None) -> None:
-    """Log and emit an error to both stdout and stderr."""
-    if logger:
-        logger.error(message)
-    typer.secho(f"ERROR: {message}", fg="red", err=True)
-    typer.secho(f"ERROR: {message}", fg="red")
+    """Log and emit an error to stderr."""
+    log_error(message, logger=logger)
 
 
 def format_bytes(num_bytes: float) -> str:
@@ -222,15 +264,20 @@ def run_subprocess_with_logging(
         logger.debug("Working directory: %s", os.getcwd())
 
     try:
+        output_level = logging.INFO if verbose else logging.DEBUG
+        error_level = logging.WARNING if verbose else logging.DEBUG
+
         def stream_reader(stream, q, stream_type):
-            """Read from stream and put lines in queue"""
+            """Read from stream and put lines in queue."""
             try:
                 while True:
                     line = stream.readline()
                     if not line:
                         break
-                    line = line.rstrip('\n\r')
-                    q.put((stream_type, line))  # Put all lines, even empty ones
+                    line = line.rstrip("\n\r")
+                    if not line:
+                        continue
+                    q.put((stream_type, line))
                 stream.close()
             except Exception:
                 pass
@@ -282,13 +329,10 @@ def run_subprocess_with_logging(
                 stream_type, line = stdout_queue.get_nowait()
                 if stream_type == 'stdout':
                     stdout_lines.append(line)
-                    # Stream to console immediately
-                    if verbose:
+                    if logger:
+                        _log_lines(logger, line, output_level)
+                    elif verbose:
                         print(line, flush=True)
-                    if logger:
-                        logger.debug("STDOUT: %s", line)
-                    if logger:
-                        logger.info(line)
                     last_output_time = current_time
                     output_received = True
             except queue.Empty:
@@ -299,13 +343,10 @@ def run_subprocess_with_logging(
                 stream_type, line = stderr_queue.get_nowait()
                 if stream_type == 'stderr':
                     stderr_lines.append(line)
-                    # Stream to console immediately
-                    if verbose:
+                    if logger:
+                        _log_lines(logger, line, error_level)
+                    elif verbose:
                         print(line, file=sys.stderr, flush=True)
-                    if logger:
-                        logger.debug("STDERR: %s", line)
-                    if logger:
-                        logger.warning(line)
                     last_output_time = current_time
                     output_received = True
             except queue.Empty:
@@ -314,10 +355,11 @@ def run_subprocess_with_logging(
             # Show progress message if no output for a while
             if not output_received and current_time - last_output_time > progress_interval:
                 elapsed = int(current_time - last_output_time)
-                if verbose:
-                    print(f"   ... still running (no output for {elapsed}s)", flush=True)
+                message = f"Process still running, no output for {elapsed} seconds"
                 if logger:
-                    logger.info(f"Process still running, no output for {int(current_time - last_output_time)} seconds")
+                    _log_lines(logger, message, output_level)
+                elif verbose:
+                    print(message, flush=True)
                 last_output_time = current_time
 
             # Small delay to prevent busy waiting
@@ -333,10 +375,10 @@ def run_subprocess_with_logging(
                 stream_type, line = stdout_queue.get_nowait()
                 if stream_type == 'stdout':
                     stdout_lines.append(line)
-                    if verbose:
-                        print(line, flush=True)
                     if logger:
-                        logger.info(line)
+                        _log_lines(logger, line, output_level)
+                    elif verbose:
+                        print(line, flush=True)
             except queue.Empty:
                 break
 
@@ -345,10 +387,10 @@ def run_subprocess_with_logging(
                 stream_type, line = stderr_queue.get_nowait()
                 if stream_type == 'stderr':
                     stderr_lines.append(line)
-                    if verbose:
-                        print(line, file=sys.stderr, flush=True)
                     if logger:
-                        logger.warning(line)
+                        _log_lines(logger, line, error_level)
+                    elif verbose:
+                        print(line, file=sys.stderr, flush=True)
             except queue.Empty:
                 break
 
@@ -363,9 +405,7 @@ def run_subprocess_with_logging(
 
     except Exception as e:
         error_msg = f"Exception running command {' '.join(cmd)}: {str(e)}"
-        if logger:
-            logger.error(error_msg)
-        print(f"ERROR: {error_msg}", file=sys.stderr)
+        log_error(error_msg, logger=logger)
         return -1, "", str(e)
 
 
@@ -494,23 +534,33 @@ def run_subprocess_with_resource_monitoring(
                     f.write(f"# {key}: {value}\n")
                 f.write("\n")
 
-            # Display resource summary
-            if verbose:
-                conditional_output("\nResource Usage Summary:", "cyan", verbose)
-                conditional_output(f"   Wall Clock Time: {elapsed_seconds}s", "white", verbose)
-                conditional_output(f"   CPU Time (User): {user_time}s", "white", verbose)
-                conditional_output(f"   CPU Time (System): {system_time}s", "white", verbose)
-                conditional_output(f"   CPU Usage: {cpu_percent}", "white", verbose)
-                conditional_output(f"   Peak RAM Usage: {max_ram_gb_str} GB", "white", verbose)
-                conditional_output(f"   Exit Code: {exit_status}\n", "white", verbose)
+            RESOURCE_SUMMARIES.append(
+                {
+                    "description": description,
+                    "command": cmd_str,
+                    "elapsed_seconds": elapsed_seconds,
+                    "user_time": user_time,
+                    "system_time": system_time,
+                    "cpu_percent": cpu_percent,
+                    "max_ram_gb": max_ram_gb_str,
+                    "exit_status": exit_status,
+                }
+            )
 
             if logger:
-                logger.info(f"Resource usage - Wall time: {elapsed_seconds}s, CPU: {cpu_percent}, Peak RAM: {max_ram_gb_str} GB")
+                logger.debug(
+                    "Resource usage recorded for %s (wall=%ss, cpu=%s, peak_ram=%s GB).",
+                    description,
+                    elapsed_seconds,
+                    cpu_percent,
+                    max_ram_gb_str,
+                )
 
         except Exception as e:
             if logger:
-                logger.warning(f"Failed to parse resource usage: {str(e)}")
-            conditional_output(f"Warning: Could not parse resource usage: {str(e)}", "yellow", verbose)
+                logger.warning("Failed to parse resource usage: %s", str(e))
+            else:
+                log_warning(f"Failed to parse resource usage: {str(e)}")
 
         # Clean up temporary file
         try:
@@ -521,7 +571,8 @@ def run_subprocess_with_resource_monitoring(
     else:
         if logger:
             logger.warning("Resource monitoring file not found")
-        conditional_output("Warning: Resource monitoring output not found", "yellow", verbose)
+        else:
+            log_warning("Resource monitoring output not found")
 
     return returncode, stdout, stderr
 
@@ -549,14 +600,53 @@ def log_final_resource_summary(resource_log_file: str, total_start_time: float, 
         f.write(f"Pipeline completed at: {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write(f"Total pipeline elapsed time: {total_elapsed:.2f} seconds ({total_elapsed/60:.2f} minutes)\n")
 
-    if verbose:
-        conditional_output("Resource usage summary saved.", "green", verbose)
-        conditional_output(f"Resource log: {resource_log_file}", "white", verbose)
-        conditional_output(f"Total pipeline time: {total_elapsed:.2f}s ({total_elapsed/60:.2f}min)", "white", verbose)
-
     if logger:
-        logger.info(f"Resource usage summary completed. Total time: {total_elapsed:.2f}s")
-        logger.info(f"Resource log saved to: {resource_log_file}")
+        _log_lines(
+            logger,
+            [
+                "Resource usage summary completed.",
+                f"Resource log: {resource_log_file}",
+                f"Total pipeline time: {total_elapsed:.2f}s ({total_elapsed/60:.2f}min)",
+            ],
+            logging.INFO,
+        )
+        log_resource_usage_summary(logger)
+    else:
+        _log_or_print(
+            f"Resource log: {resource_log_file}",
+            level=logging.INFO,
+            verbose=verbose,
+            force=True,
+        )
+
+
+def log_resource_usage_summary(logger: Optional[logging.Logger] = None) -> None:
+    """Log a per-command resource usage summary at the end of the pipeline."""
+    if not RESOURCE_SUMMARIES:
+        return
+    logger = logger or _get_logger()
+    if not getattr(logger, "handlers", []):
+        return
+
+    _log_lines(logger, "Resource usage summary (per command):", logging.INFO)
+    for entry in RESOURCE_SUMMARIES:
+        description = entry.get("description", "Command")
+        wall = entry.get("elapsed_seconds", "N/A")
+        user_time = entry.get("user_time", "N/A")
+        system_time = entry.get("system_time", "N/A")
+        cpu = entry.get("cpu_percent", "N/A")
+        ram = entry.get("max_ram_gb", "N/A")
+        exit_status = entry.get("exit_status", "N/A")
+        wall_display = f"{wall}s" if wall not in ("N/A", None, "") else "N/A"
+        user_display = f"{user_time}s" if user_time not in ("N/A", None, "") else "N/A"
+        system_display = f"{system_time}s" if system_time not in ("N/A", None, "") else "N/A"
+        ram_display = f"{ram} GB" if ram not in ("N/A", None, "") else "N/A"
+        line = (
+            f"  - {description}: wall={wall_display}, user={user_display}, "
+            f"system={system_display}, cpu={cpu}, peak_ram={ram_display}, "
+            f"exit={exit_status}"
+        )
+        _log_lines(logger, line, logging.INFO)
 
 
 def display_pipeline_completion_summary(start_time: float, savedir: str, logger: Optional[logging.Logger] = None, verbose: bool = True) -> None:
@@ -605,19 +695,19 @@ def display_pipeline_completion_summary(start_time: float, savedir: str, logger:
     if complementarity_files > 0:
         output_files.append(f"{complementarity_files} complementarity report(s)")
 
-    if verbose:
-        conditional_output("Pipeline completed.", "green", verbose)
-        conditional_output(f"Total execution time: {time_str} ({total_elapsed:.2f} seconds)", "white", verbose)
-        conditional_output(f"Output directory: {savedir}", "white", verbose)
-        conditional_output(f"Generated files: {', '.join(output_files) if output_files else 'None'}", "white", verbose)
-        conditional_output(f"Completed at: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", "white", verbose)
+    summary_lines = [
+        "Pipeline completed.",
+        f"Total execution time: {time_str} ({total_elapsed:.2f} seconds)",
+        f"Output directory: {savedir}",
+        f"Generated files: {', '.join(output_files) if output_files else 'None'}",
+        f"Completed at: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+    ]
 
     if logger:
-        logger.info("Pipeline completed.")
-        logger.info(f"Total execution time: {time_str} ({total_elapsed:.2f} seconds)")
-        logger.info(f"Output directory: {savedir}")
-        logger.info(f"Generated files: {', '.join(output_files) if output_files else 'None'}")
-        logger.info(f"Completed at: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        _log_lines(logger, summary_lines, logging.INFO)
+    else:
+        for line in summary_lines:
+            _log_or_print(line, level=logging.INFO, verbose=verbose, force=True)
 
 
 def parse_emapper_annotations(emapper_file_path: str, logger: Optional[logging.Logger] = None) -> Dict[str, Dict[str, List[str]]]:
@@ -836,8 +926,9 @@ def configure_logging(log_level: str, log_dir: Union[str, Path]) -> logging.Logg
 
     logger = logging.getLogger("ModuComp")
     numeric_level = getattr(logging, log_level.upper(), logging.INFO)
-    logger.setLevel(numeric_level)
+    logger.setLevel(logging.DEBUG)
     logger.handlers.clear()
+    logger.propagate = False
 
     formatter = logging.Formatter(
         fmt="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -848,12 +939,22 @@ def configure_logging(log_level: str, log_dir: Union[str, Path]) -> logging.Logg
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(formatter)
 
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(numeric_level)
-    console_handler.setFormatter(formatter)
+    class _BelowWarningFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            return record.levelno < logging.WARNING
+
+    stdout_handler = logging.StreamHandler(stream=sys.stdout)
+    stdout_handler.setLevel(numeric_level)
+    stdout_handler.setFormatter(formatter)
+    stdout_handler.addFilter(_BelowWarningFilter())
+
+    stderr_handler = logging.StreamHandler(stream=sys.stderr)
+    stderr_handler.setLevel(logging.WARNING)
+    stderr_handler.setFormatter(formatter)
 
     logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
+    logger.addHandler(stdout_handler)
+    logger.addHandler(stderr_handler)
     logger.debug("Logging initialised at level %s", logging.getLevelName(numeric_level))
     logger.info(f"Log file created at: {log_file}")
     return logger
@@ -903,10 +1004,9 @@ def how_many_genomes(genomedir: str, verbose: bool = True):
     """
     n_files = len(get_path_to_each_genome(genomedir))
     if n_files > 0:
-        conditional_output(f"OK: {n_files} faa files were found in '{genomedir}'\n", "white", verbose)
+        conditional_output(f"OK: {n_files} faa files were found in '{genomedir}'", "white", verbose)
     else:
-        # Always show errors regardless of verbose setting
-        typer.secho(f"ERROR: No FAA files were found in '{genomedir}'\n", fg="red")
+        log_error(f"No FAA files were found in '{genomedir}'")
         exit()
 
 
@@ -921,12 +1021,12 @@ def create_output_dir(savedir: str, verbose: bool = True):
     verbose : bool
         Whether to display detailed output
     """
-    conditional_output("\nCreating output directory", "green", verbose)
+    conditional_output("Creating output directory", "green", verbose)
     if os.path.exists(savedir):
-        conditional_output(f"OK: Output directory already exists at: {savedir}\n", "white", verbose)
+        conditional_output(f"OK: Output directory already exists at: {savedir}", "white", verbose)
     else:
         os.makedirs(savedir, exist_ok=True)
-        conditional_output(f"OK: Output directory created at: {savedir}\n", "white", verbose)
+        conditional_output(f"OK: Output directory created at: {savedir}", "white", verbose)
 
 
 def get_tmp_dir(savedir:str) -> str:
@@ -958,13 +1058,13 @@ def create_tmp_dir(savedir: str, verbose: bool = True):
     verbose : bool
         Whether to display detailed output
     """
-    conditional_output("\nCreating tmp dir", "green", verbose)
+    conditional_output("Creating tmp dir", "green", verbose)
     tmp_dir_path = get_tmp_dir(savedir)
     if (os.path.exists(tmp_dir_path)):
-        conditional_output(f"OK: Tmp directory already exists at: {tmp_dir_path}\n", "white", verbose)
+        conditional_output(f"OK: Tmp directory already exists at: {tmp_dir_path}", "white", verbose)
     else:
         os.mkdir(tmp_dir_path)
-        conditional_output(f"OK: Tmp directory created at: {tmp_dir_path}\n", "white", verbose)
+        conditional_output(f"OK: Tmp directory created at: {tmp_dir_path}", "white", verbose)
 
 
 def adapt_fasta_headers(genomedir: str, savedir: str, verbose: bool = True) -> None:
@@ -985,11 +1085,11 @@ def adapt_fasta_headers(genomedir: str, savedir: str, verbose: bool = True) -> N
     verbose : bool
         Whether to display detailed output
     """
-    conditional_output("\nModifying fasta headers", "green", verbose)
+    conditional_output("Modifying fasta headers", "green", verbose)
     path_to_each_genome = get_path_to_each_genome(genomedir)
     output_dir = f"{get_tmp_dir(savedir)}/faa"
     if os.path.exists(output_dir):
-        conditional_output(f"OK: Fasta headers already modified at: {output_dir}\n", "white", verbose)
+        conditional_output(f"OK: Fasta headers already modified at: {output_dir}", "white", verbose)
         return
 
     os.mkdir(output_dir)
@@ -1005,7 +1105,7 @@ def adapt_fasta_headers(genomedir: str, savedir: str, verbose: bool = True) -> N
                         i+=1
                     else:
                         outfile.write(line)
-    conditional_output(f"OK: Fasta headers modified at: {output_dir}\n", "white", verbose)
+    conditional_output(f"OK: Fasta headers modified at: {output_dir}", "white", verbose)
 
 
 def copy_faa_to_tmp(genomedir: str, savedir: str, verbose: bool = True) -> None:
@@ -1025,18 +1125,18 @@ def copy_faa_to_tmp(genomedir: str, savedir: str, verbose: bool = True) -> None:
     verbose : bool
         Whether to display detailed output
     """
-    conditional_output("\nCopying faa files to tmp dir", "green", verbose)
+    conditional_output("Copying faa files to tmp dir", "green", verbose)
     path_to_each_genome = get_path_to_each_genome(genomedir)
     output_dir = f"{get_tmp_dir(savedir)}/faa"
     if os.path.exists(output_dir):
-        conditional_output(f"OK: Fasta files already exist at: {output_dir}\n", "white", verbose)
+        conditional_output(f"OK: Fasta files already exist at: {output_dir}", "white", verbose)
         return
 
     os.mkdir(output_dir)
     conditional_output("Copying genome files to temporary directory...", "yellow", verbose)
     for each_file in path_to_each_genome:
         shutil.copy(each_file, output_dir)
-    conditional_output(f"OK: Fasta files copied to: {output_dir}\n", "white", verbose)
+    conditional_output(f"OK: Fasta files copied to: {output_dir}", "white", verbose)
 
 
 def merge_genomes(savedir: str, logger: Optional[logging.Logger] = None, verbose: bool = True) -> bool:
@@ -1057,13 +1157,13 @@ def merge_genomes(savedir: str, logger: Optional[logging.Logger] = None, verbose
     bool
         True if the merged file was created or already exists, False otherwise
     """
-    conditional_output("\nMerging genomes", "green", verbose)
+    conditional_output("Merging genomes", "green", verbose)
     genome_file_paths = glob.glob(f"{get_tmp_dir(savedir)}/faa/*.faa")
     output_file = f"{get_tmp_dir(savedir)}/merged_genomes.faa"
 
 
     if os.path.exists(output_file):
-        conditional_output(f"OK: Merged genomes file already exists at: {output_file}\n", "white", verbose)
+        conditional_output(f"OK: Merged genomes file already exists at: {output_file}", "white", verbose)
         if logger:
             logger.info(f"Using existing merged genomes file: {output_file}")
         return True
@@ -1071,10 +1171,7 @@ def merge_genomes(savedir: str, logger: Optional[logging.Logger] = None, verbose
 
     if not genome_file_paths:
         error_msg = f"No FAA files found in {get_tmp_dir(savedir)}/faa/"
-        # Always show errors regardless of verbose setting
-        typer.secho(f"ERROR: {error_msg}", fg="red")
-        if logger:
-            logger.error(error_msg)
+        log_error(error_msg, logger=logger)
         return False
 
     conditional_output("Merging individual genome files...", "yellow", verbose)
@@ -1084,16 +1181,13 @@ def merge_genomes(savedir: str, logger: Optional[logging.Logger] = None, verbose
                 with open(each_file) as infile:
                     for line in infile:
                         outfile.write(line)
-        conditional_output(f"OK: Fasta files merged at: {output_file}\n", "white", verbose)
+        conditional_output(f"OK: Fasta files merged at: {output_file}", "white", verbose)
         if logger:
             logger.info(f"Successfully created merged genome file: {output_file}")
         return True
     except Exception as e:
         error_msg = f"Error merging genome files: {str(e)}"
-        # Always show errors regardless of verbose setting
-        typer.secho(f"ERROR: {error_msg}", fg="red")
-        if logger:
-            logger.error(error_msg)
+        log_error(error_msg, logger=logger)
         return False
 
 
@@ -1117,12 +1211,16 @@ def run_emapper(savedir: str, ncpus: int, resource_log_file: str, lowmem: bool =
     bool
         True if emapper ran successfully or outputs already exist, False otherwise
     """
-    conditional_output("\nStarting eggNOG-mapper", "green", verbose)
+    conditional_output("Starting eggNOG-mapper", "green", verbose)
 
 
     final_emapper_annotation_file = f"{savedir}/emapper_out.emapper.annotations"
     if os.path.exists(final_emapper_annotation_file):
-        typer.secho(f"OK: Emapper annotations already exist at: {final_emapper_annotation_file}\n", fg="white")
+        conditional_output(
+            f"OK: Emapper annotations already exist at: {final_emapper_annotation_file}",
+            "white",
+            verbose,
+        )
         if logger:
             logger.info(f"Using existing emapper annotations: {final_emapper_annotation_file}")
         return True
@@ -1135,14 +1233,16 @@ def run_emapper(savedir: str, ncpus: int, resource_log_file: str, lowmem: bool =
 
     if not os.path.exists(merged_genomes_file):
         error_msg = f"Merged genomes file not found at: {merged_genomes_file}"
-        typer.secho(f"ERROR: {error_msg}", fg="red")
-        if logger:
-            logger.error(error_msg)
+        log_error(error_msg, logger=logger)
         return False
 
 
     if os.path.exists(emapper_tmp_file):
-        typer.secho(f"OK: Emapper output already exists at: {emapper_tmp_file}\n", fg="white")
+        conditional_output(
+            f"OK: Emapper output already exists at: {emapper_tmp_file}",
+            "white",
+            verbose,
+        )
         if logger:
             logger.info(f"Using existing emapper output from temporary directory: {emapper_tmp_file}")
 
@@ -1185,41 +1285,40 @@ def run_emapper(savedir: str, ncpus: int, resource_log_file: str, lowmem: bool =
             error_msg = f"emapper failed with return code {returncode}"
             if stderr:
                 error_msg += f": {stderr}"
-            typer.secho(f"ERROR: {error_msg}", fg="red")
-            if logger:
-                logger.error(error_msg)
+            log_error(error_msg, logger=logger)
             return False
 
 
         if logger and stdout:
-            logger.info(f"emapper stdout summary: {stdout[:500]}{'...' if len(stdout) > 500 else ''}")
+            summary = stdout[:500] + ("..." if len(stdout) > 500 else "")
+            _log_lines(logger, f"emapper stdout summary:\n{summary}", logging.INFO)
 
 
         if not os.path.exists(emapper_tmp_file):
             error_msg = f"emapper did not generate expected output: {emapper_tmp_file}"
-            typer.secho(f"ERROR: {error_msg}", fg="red")
-            if logger:
-                logger.error(error_msg)
+            log_error(error_msg, logger=logger)
             return False
 
 
         shutil.copy(emapper_tmp_file, final_emapper_annotation_file)
 
-        typer.secho(f"OK: emapper output saved at: {output_folder_emapper}\n", fg="white")
-        typer.secho(f"OK: emapper annotations copied to: {final_emapper_annotation_file}\n", fg="white")
+        conditional_output(f"OK: emapper output saved at: {output_folder_emapper}", "white", verbose)
+        conditional_output(
+            f"OK: emapper annotations copied to: {final_emapper_annotation_file}",
+            "white",
+            verbose,
+        )
         if logger:
             logger.info(f"Successfully ran emapper and saved annotations to: {final_emapper_annotation_file}")
         return True
 
     except Exception as e:
         error_msg = f"Error running emapper: {str(e)}"
-        typer.secho(f"ERROR: {error_msg}", fg="red")
-        if logger:
-            logger.error(error_msg)
+        log_error(error_msg, logger=logger)
         return False
 
 
-def remove_temp_files(savedir: str, logger: Optional[logging.Logger] = None) -> None:
+def remove_temp_files(savedir: str, logger: Optional[logging.Logger] = None, verbose: bool = True) -> None:
     """
     Remove temporary files and directories.
 
@@ -1234,13 +1333,11 @@ def remove_temp_files(savedir: str, logger: Optional[logging.Logger] = None) -> 
     if os.path.exists(tmp_dir):
         try:
             shutil.rmtree(tmp_dir)
-            typer.secho(f"OK: Temporary files removed from: {tmp_dir}", fg="white")
+            conditional_output(f"OK: Temporary files removed from: {tmp_dir}", "white", verbose)
             if logger:
                 logger.info(f"Removed temporary directory: {tmp_dir}")
         except Exception as e:
-            typer.secho(f"WARNING: Failed to remove temporary files: {str(e)}", fg="yellow")
-            if logger:
-                logger.warning(f"Failed to remove temporary directory {tmp_dir}: {str(e)}")
+            log_warning(f"Failed to remove temporary directory {tmp_dir}: {str(e)}", logger=logger)
 
 
 def check_final_reports_exist(savedir: str, calculate_complementarity: int, logger: Optional[logging.Logger] = None) -> bool:
@@ -1343,18 +1440,16 @@ def generate_complementarity_report(
 
 
     if os.path.exists(output_file):
+        conditional_output(f"OK: Complementarity report already exists at: {output_file}", "white", verbose)
         if logger:
             logger.info(f"Complementarity report already exists at {output_file}")
-        conditional_output(f"OK: Complementarity report already exists at: {output_file}", "white", verbose)
         return
 
 
     module_matrix_file = f"{savedir}/module_completeness.tsv"
     if not os.path.exists(module_matrix_file):
         error_msg = f"Module completeness matrix not found at: {module_matrix_file}"
-        if logger:
-            logger.error(error_msg)
-        typer.secho(f"ERROR: {error_msg}", fg="red")
+        log_error(error_msg, logger=logger)
         return
 
 
@@ -1371,13 +1466,15 @@ def generate_complementarity_report(
             emapper_file = possible_file
             if logger:
                 logger.info(f"Found emapper annotation file at: {emapper_file}")
-            typer.secho(f"OK: Using emapper annotations from: {emapper_file}", fg="white")
+            conditional_output(f"OK: Using emapper annotations from: {emapper_file}", "white", verbose)
             break
 
     if not emapper_file:
-        if logger:
-            logger.warning(f"Emapper annotation file not found in any of the expected locations. Will use placeholder protein IDs.")
-        typer.secho(f"WARNING: Emapper annotation file not found. Will use placeholder protein IDs.", fg="yellow")
+        log_warning(
+            "Emapper annotation file not found in any expected location. "
+            "Will use placeholder protein IDs.",
+            logger=logger,
+        )
 
 
     kpct_output_file = None
@@ -1395,9 +1492,7 @@ def generate_complementarity_report(
 
     if not kpct_output_file:
         error_msg = "KPCT output file not found. Cannot extract module metadata."
-        if logger:
-            logger.error(error_msg)
-        typer.secho(f"ERROR: {error_msg}", fg="red")
+        log_error(error_msg, logger=logger)
         return
 
     try:
@@ -1476,10 +1571,13 @@ def generate_complementarity_report(
             error_msg = f"Cannot identify required module columns in KPCT output: {kpct_output_file}"
             if logger:
                 logger.error(error_msg)
-                if module_id_col: logger.error(f"Found module_id_col: {module_id_col}")
-                if module_name_col: logger.error(f"Found module_name_col: {module_name_col}")
+                if module_id_col:
+                    logger.error(f"Found module_id_col: {module_id_col}")
+                if module_name_col:
+                    logger.error(f"Found module_name_col: {module_name_col}")
                 logger.error(f"Available columns: {kpct_df.columns.tolist()}")
-            typer.secho(f"ERROR: {error_msg}", fg="red")
+            else:
+                log_error(error_msg, logger=logger)
             return
 
         if not contig_col or not matching_ko_col:
@@ -1487,7 +1585,10 @@ def generate_complementarity_report(
                 logger.warning(f"Cannot identify contig or matching_ko columns in KPCT output.")
                 logger.warning(f"Found contig_col: {contig_col}, matching_ko_col: {matching_ko_col}")
                 logger.warning(f"Available columns: {kpct_df.columns.tolist()}")
-            typer.secho(f"WARNING: Missing columns in KPCT output may affect mapping of KOs to combinations.", fg="yellow")
+            log_warning(
+                "Missing columns in KPCT output may affect mapping of KOs to combinations.",
+                logger=logger,
+            )
 
 
         module_metadata = {}
@@ -1749,10 +1850,6 @@ def generate_complementarity_report(
 
             report_df.to_csv(output_file, sep='\t', index=False)
 
-            if logger:
-                logger.info(f"Found {len(report_df)} complementary modules in {n_members}-member combinations")
-                logger.info(f"Complementarity report saved to: {output_file}")
-
             conditional_output(f"OK: Found {len(report_df)} complementary modules in {n_members}-member combinations", "green", verbose)
             conditional_output(f"Complementarity report saved to: {output_file}", "white", verbose)
         else:
@@ -1773,17 +1870,27 @@ def generate_complementarity_report(
             report_df = pd.DataFrame(columns=columns)
             report_df.to_csv(output_file, sep='\t', index=False)
 
-            typer.secho(f"WARNING: No complementary modules found in {n_members}-member combinations", fg="yellow")
-            typer.secho(f"Empty report saved to: {output_file}", fg="white")
+            log_warning(
+                f"No complementary modules found in {n_members}-member combinations",
+                logger=logger,
+            )
+            conditional_output(f"Empty report saved to: {output_file}", "white", verbose)
 
     except Exception as e:
         error_msg = f"Error generating complementarity report: {str(e)}"
         if logger:
             logger.error(error_msg, exc_info=True)
-        typer.secho(f"ERROR: {error_msg}", fg="red")
+        else:
+            log_error(error_msg, logger=logger)
 
 
-def ko_matrix_to_kpct_format(kos_matrix: str, savedir: str, calculate_complementarity: int = 0, logger: Optional[logging.Logger] = None) -> str:
+def ko_matrix_to_kpct_format(
+    kos_matrix: str,
+    savedir: str,
+    calculate_complementarity: int = 0,
+    logger: Optional[logging.Logger] = None,
+    verbose: bool = True,
+) -> str:
     """
     Convert KO matrix to KPCT format.
 
@@ -1812,7 +1919,7 @@ def ko_matrix_to_kpct_format(kos_matrix: str, savedir: str, calculate_complement
 
         initial_delimiter = ',' if kos_matrix.lower().endswith('.csv') else '\t'
 
-        typer.secho(f"Reading KO matrix file: {kos_matrix}", fg="yellow")
+        conditional_output(f"Reading KO matrix file: {kos_matrix}", "yellow", verbose)
         if logger:
             logger.info(f"Reading KO matrix file with delimiter '{initial_delimiter}': {kos_matrix}")
 
@@ -1865,9 +1972,7 @@ def ko_matrix_to_kpct_format(kos_matrix: str, savedir: str, calculate_complement
 
         if 'taxon_oid' not in ko_df.columns:
             msg = "Invalid KO matrix format: missing 'taxon_oid' column"
-            if logger:
-                logger.error(msg)
-            typer.secho(f"ERROR: {msg}", fg="red")
+            log_error(msg, logger=logger)
             exit(1)
 
 
@@ -1912,14 +2017,12 @@ def ko_matrix_to_kpct_format(kos_matrix: str, savedir: str, calculate_complement
 
         if logger:
             logger.info(f"KO matrix converted to KPCT format: {output_path}")
-        typer.secho(f"OK: KO matrix converted to KPCT format: {output_path}", fg="white")
+        conditional_output(f"OK: KO matrix converted to KPCT format: {output_path}", "white", verbose)
         return output_path
 
     except Exception as e:
         error_msg = f"Error converting KO matrix to KPCT format: {str(e)}"
-        if logger:
-            logger.error(error_msg)
-        typer.secho(f"ERROR: {error_msg}", fg="red")
+        log_error(error_msg, logger=logger)
         raise
 
 
@@ -1975,7 +2078,12 @@ def get_ko_protein_mappings_from_kpct_input(kpct_input_file: str, logger: Option
         return {}
 
 
-def create_module_completeness_matrix(savedir: str, kpct_outprefix: str, logger: Optional[logging.Logger] = None) -> None:
+def create_module_completeness_matrix(
+    savedir: str,
+    kpct_outprefix: str,
+    logger: Optional[logging.Logger] = None,
+    verbose: bool = True,
+) -> None:
     """
     Create a module completeness matrix from the KPCT output.
 
@@ -2007,9 +2115,7 @@ def create_module_completeness_matrix(savedir: str, kpct_outprefix: str, logger:
 
     if not os.path.exists(kpct_output_file):
         error_msg = f"KPCT output file not found: tried {kpct_outprefix}_contigs.with_weights.tsv and alternatives"
-        if logger:
-            logger.error(error_msg)
-        typer.secho(f"ERROR: {error_msg}", fg="red")
+        log_error(error_msg, logger=logger)
         return
 
     try:
@@ -2109,7 +2215,8 @@ def create_module_completeness_matrix(savedir: str, kpct_outprefix: str, logger:
             error_msg = "Could not identify module columns in the KPCT output"
             if logger:
                 logger.error(error_msg)
-            typer.secho(f"ERROR: {error_msg}", fg="red")
+            else:
+                log_error(error_msg, logger=logger)
             return
 
         # Build the result data
@@ -2152,19 +2259,22 @@ def create_module_completeness_matrix(savedir: str, kpct_outprefix: str, logger:
             logger.info(f"Matrix contains {single_genomes} single genomes out of {total_genomes} total entries")
             if all_genomes:
                 logger.info(f"Expected {len(all_genomes)} single genomes from KPCT input")
-        typer.secho(f"OK: Module completeness matrix saved to: {output_file}", fg="white")
+        conditional_output(f"OK: Module completeness matrix saved to: {output_file}", "white", verbose)
 
     except Exception as e:
         error_msg = f"Error creating module completeness matrix: {str(e)}"
         if logger:
-            logger.error(error_msg)
-        typer.secho(f"ERROR: {error_msg}", fg="red")
-
-        if logger:
-            logger.error(f"Error details: {e}", exc_info=True)
+            logger.error(error_msg, exc_info=True)
+        else:
+            log_error(error_msg, logger=logger)
 
 
-def create_ko_matrix_from_emapper_annotation(emapper_file_path: str, output_file_path: str, logger: Optional[logging.Logger] = None) -> None:
+def create_ko_matrix_from_emapper_annotation(
+    emapper_file_path: str,
+    output_file_path: str,
+    logger: Optional[logging.Logger] = None,
+    verbose: bool = True,
+) -> None:
     """
     Create a KO matrix from an eggNOG-mapper annotation file.
 
@@ -2203,24 +2313,22 @@ def create_ko_matrix_from_emapper_annotation(emapper_file_path: str, output_file
     - Removes 'ko:' prefixes and weight annotations like '(0.5)'
     - Skips rows with missing or '-' KO annotations
     """
-    typer.secho("\nCreating KO matrix from eggNOG-mapper annotations", fg="green")
+    conditional_output("Creating KO matrix from eggNOG-mapper annotations", "green", verbose)
 
 
     if os.path.exists(output_file_path):
-        typer.secho(f"OK: KO matrix already exists at: {output_file_path}", fg="white")
+        conditional_output(f"OK: KO matrix already exists at: {output_file_path}", "white", verbose)
         if logger:
             logger.info(f"KO matrix already exists at: {output_file_path}")
         return
 
     if not os.path.exists(emapper_file_path):
         error_msg = f"eMapper annotation file not found at {emapper_file_path}. Cannot proceed."
-        if logger:
-            logger.error(error_msg)
-        typer.secho(f"ERROR: {error_msg}", fg="red")
+        log_error(error_msg, logger=logger)
         exit(1)
 
     try:
-        typer.secho("Processing eggNOG-mapper annotations and extracting KO terms...", fg="yellow")
+        conditional_output("Processing eggNOG-mapper annotations and extracting KO terms...", "yellow", verbose)
 
         if logger:
             logger.info(f"Reading eggNOG-mapper annotations from: {emapper_file_path}")
@@ -2280,13 +2388,11 @@ def create_ko_matrix_from_emapper_annotation(emapper_file_path: str, output_file
 
         if not kos_data_for_matrix_df:
             error_msg = "No KO data found in the eMapper annotations file"
-            if logger:
-                logger.error(error_msg)
-            typer.secho(f"ERROR: {error_msg}", fg="red")
+            log_error(error_msg, logger=logger)
             return
 
 
-        typer.secho("Creating KO count matrix (kos_matrix.csv)...", fg="yellow")
+        conditional_output("Creating KO count matrix (kos_matrix.csv)...", "yellow", verbose)
         kos_count_df = pd.concat(kos_data_for_matrix_df)
 
 
@@ -2313,13 +2419,14 @@ def create_ko_matrix_from_emapper_annotation(emapper_file_path: str, output_file
             logger.info(f"Created KO matrix with {len(kos_count_df)} genomes and {len(kos_count_df.columns)-1} KOs")
             logger.info(f"KO matrix saved to: {output_file_path}")
 
-        typer.secho(f"OK: KO matrix created and saved to: {output_file_path}", fg="white")
+        conditional_output(f"OK: KO matrix created and saved to: {output_file_path}", "white", verbose)
 
     except Exception as e:
         error_msg = f"Error creating KO matrix: {str(e)}"
         if logger:
             logger.error(error_msg, exc_info=True)
-        typer.secho(f"ERROR: {error_msg}", fg="red")
+        else:
+            log_error(error_msg, logger=logger)
         exit(1)
 
 
@@ -2347,16 +2454,12 @@ def check_kpct_installed(logger: Optional[logging.Logger] = None) -> bool:
 
         if give_completeness_check.returncode != 0:
             error_msg = "KPCT 'give_completeness' tool not found in PATH. Please install it via pip: pip install kegg-pathways-completeness"
-            if logger:
-                logger.error(error_msg)
-            typer.secho(f"ERROR: {error_msg}", fg="red")
+            log_error(error_msg, logger=logger)
             return False
         return True
     except Exception as e:
         error_msg = f"Error checking for KPCT installation: {str(e)}"
-        if logger:
-            logger.error(error_msg)
-        typer.secho(f"ERROR: {error_msg}", fg="red")
+        log_error(error_msg, logger=logger)
         return False
 
 
@@ -2441,9 +2544,7 @@ def chunk_kpct_input_file(kpct_input_file: str, savedir: str, n_chunks: int, log
 
         if not lines:
             error_msg = f"KPCT input file is empty: {kpct_input_file}"
-            if logger:
-                logger.error(error_msg)
-            typer.secho(f"ERROR: {error_msg}", fg="red")
+            log_error(error_msg, logger=logger)
             return []
 
         # Calculate lines per chunk using ceiling division to ensure we create exactly n_chunks
@@ -2495,9 +2596,7 @@ def chunk_kpct_input_file(kpct_input_file: str, savedir: str, n_chunks: int, log
 
     except Exception as e:
         error_msg = f"Error chunking KPCT input file: {str(e)}"
-        if logger:
-            logger.error(error_msg)
-        typer.secho(f"ERROR: {error_msg}", fg="red")
+        log_error(error_msg, logger=logger)
         return []
 
 
@@ -2636,13 +2735,18 @@ def concatenate_kpct_outputs(chunk_dirs: List[str], savedir: str, kpct_outprefix
 
     except Exception as e:
         error_msg = f"Error concatenating KPCT outputs: {str(e)}"
-        if logger:
-            logger.error(error_msg)
-        typer.secho(f"ERROR: {error_msg}", fg="red")
+        log_error(error_msg, logger=logger)
         return False
 
 
-def run_kpct_parallel(kpct_input_file: str, savedir: str, kpct_outprefix: str, ncpus: int, logger: Optional[logging.Logger] = None) -> bool:
+def run_kpct_parallel(
+    kpct_input_file: str,
+    savedir: str,
+    kpct_outprefix: str,
+    ncpus: int,
+    logger: Optional[logging.Logger] = None,
+    verbose: bool = True,
+) -> bool:
     """
     Run KPCT in parallel by chunking the input file and processing chunks concurrently.
 
@@ -2693,7 +2797,7 @@ def run_kpct_parallel(kpct_input_file: str, savedir: str, kpct_outprefix: str, n
         if all(os.path.exists(f) for f in final_outputs):
             if logger:
                 logger.info("KPCT output files already exist, skipping parallel processing")
-            typer.secho("OK: KPCT output files already exist", fg="white")
+            conditional_output("OK: KPCT output files already exist", "white", verbose)
             return True
 
 
@@ -2702,7 +2806,7 @@ def run_kpct_parallel(kpct_input_file: str, savedir: str, kpct_outprefix: str, n
         if logger:
             logger.info(f"Running KPCT in parallel with up to {n_chunks} chunks using {ncpus} CPU cores")
 
-        typer.secho(f"Running KPCT in parallel with up to {n_chunks} chunks", fg="yellow")
+        conditional_output(f"Running KPCT in parallel with up to {n_chunks} chunks", "yellow", verbose)
 
 
         chunks_base_dir = os.path.join(get_tmp_dir(savedir), "kpct_chunk_outputs")
@@ -2721,7 +2825,7 @@ def run_kpct_parallel(kpct_input_file: str, savedir: str, kpct_outprefix: str, n
         if all_chunks_exist:
             if logger:
                 logger.info("All chunk outputs already exist, proceeding to concatenation")
-            typer.secho("OK: All chunks already processed, concatenating results", fg="white")
+            conditional_output("OK: All chunks already processed, concatenating results", "white", verbose)
 
 
             concatenation_success = concatenate_kpct_outputs(existing_chunk_dirs, savedir, kpct_outprefix, logger)
@@ -2778,11 +2882,11 @@ def run_kpct_parallel(kpct_input_file: str, savedir: str, kpct_outprefix: str, n
         if not chunks_to_process:
             if logger:
                 logger.info("All chunks already processed, proceeding to concatenation")
-            typer.secho("OK: All chunks already processed, concatenating results", fg="white")
+            conditional_output("OK: All chunks already processed, concatenating results", "white", verbose)
         else:
             if logger:
                 logger.info(f"Processing {len(chunks_to_process)} remaining chunks")
-            typer.secho(f"Processing {len(chunks_to_process)} remaining chunks", fg="yellow")
+            conditional_output(f"Processing {len(chunks_to_process)} remaining chunks", "yellow", verbose)
 
 
             failed_chunks = []
@@ -2824,9 +2928,7 @@ def run_kpct_parallel(kpct_input_file: str, savedir: str, kpct_outprefix: str, n
 
             if failed_chunks:
                 error_msg = f"Failed to process {len(failed_chunks)} chunks: {failed_chunks}"
-                if logger:
-                    logger.error(error_msg)
-                typer.secho(f"ERROR: {error_msg}", fg="red")
+                log_error(error_msg, logger=logger)
                 return False
 
 
@@ -2837,9 +2939,7 @@ def run_kpct_parallel(kpct_input_file: str, savedir: str, kpct_outprefix: str, n
 
         if not all_chunks_exist:
             error_msg = f"Not all chunks were processed successfully. Expected {len(all_chunk_dirs)}, got {len(final_chunk_dirs)}"
-            if logger:
-                logger.error(error_msg)
-            typer.secho(f"ERROR: {error_msg}", fg="red")
+            log_error(error_msg, logger=logger)
             return False
 
 
@@ -2855,26 +2955,29 @@ def run_kpct_parallel(kpct_input_file: str, savedir: str, kpct_outprefix: str, n
         missing_outputs = [f for f in final_outputs if not os.path.exists(f)]
         if missing_outputs:
             error_msg = f"Failed to create final output files: {missing_outputs}"
-            if logger:
-                logger.error(error_msg)
-            typer.secho(f"ERROR: {error_msg}", fg="red")
+            log_error(error_msg, logger=logger)
             return False
 
         if logger:
             logger.info("Successfully completed parallel KPCT processing")
-        typer.secho("OK: KPCT parallel processing completed successfully", fg="green")
+        conditional_output("OK: KPCT parallel processing completed successfully", "green", verbose)
 
         return True
 
     except Exception as e:
         error_msg = f"Error in parallel KPCT processing: {str(e)}"
-        if logger:
-            logger.error(error_msg)
-        typer.secho(f"ERROR: {error_msg}", fg="red")
+        log_error(error_msg, logger=logger)
         return False
 
 
-def run_kpct(kpct_input_file: str, savedir: str, kpct_outprefix: str, resource_log_file: str, logger: Optional[logging.Logger] = None) -> bool:
+def run_kpct(
+    kpct_input_file: str,
+    savedir: str,
+    kpct_outprefix: str,
+    resource_log_file: str,
+    logger: Optional[logging.Logger] = None,
+    verbose: bool = True,
+) -> bool:
     """
     Run the KPCT give_completeness tool (sequential version).
     This function is kept as a fallback in case parallel processing fails.
@@ -2912,21 +3015,19 @@ def run_kpct(kpct_input_file: str, savedir: str, kpct_outprefix: str, resource_l
             resource_log_file,
             logger,
             "Running KPCT give_completeness tool (sequential)",
-            True
+            verbose,
         )
 
         if returncode != 0:
             error_msg = f"KPCT tool failed with return code {returncode}"
             if stderr:
                 error_msg += f": {stderr}"
-            if logger:
-                logger.error(error_msg)
-            typer.secho(f"ERROR: {error_msg}", fg="red")
+            log_error(error_msg, logger=logger)
             return False
 
 
         if logger and stdout:
-            logger.info(f"KPCT stdout: {stdout}")
+            _log_lines(logger, f"KPCT stdout:\n{stdout}", logging.INFO)
 
 
         possible_kpct_files = [
@@ -2939,28 +3040,36 @@ def run_kpct(kpct_input_file: str, savedir: str, kpct_outprefix: str, resource_l
 
         if not kpct_file_exists:
             error_msg = f"KPCT did not generate any output files with prefix '{kpct_outprefix}'"
-            if logger:
-                logger.error(error_msg)
-            typer.secho(f"ERROR: {error_msg}", fg="red")
+            log_error(error_msg, logger=logger)
             return False
 
 
         created_files = [f for f in possible_kpct_files if os.path.exists(f)]
         if logger:
             logger.info(f"KPCT successfully created output files: {created_files}")
-        typer.secho(f"OK: KPCT completed successfully. Created files: {[os.path.basename(f) for f in created_files]}", fg="green")
+        conditional_output(
+            f"OK: KPCT completed successfully. Created files: {[os.path.basename(f) for f in created_files]}",
+            "green",
+            verbose,
+        )
 
         return True
 
     except Exception as e:
         error_msg = f"Error running KPCT: {str(e)}"
-        if logger:
-            logger.error(error_msg)
-        typer.secho(f"ERROR: {error_msg}", fg="red")
+        log_error(error_msg, logger=logger)
         return False
 
 
-def run_kpct_with_fallback(kpct_input_file: str, savedir: str, kpct_outprefix: str, ncpus: int, resource_log_file: str, logger: Optional[logging.Logger] = None) -> bool:
+def run_kpct_with_fallback(
+    kpct_input_file: str,
+    savedir: str,
+    kpct_outprefix: str,
+    ncpus: int,
+    resource_log_file: str,
+    logger: Optional[logging.Logger] = None,
+    verbose: bool = True,
+) -> bool:
     """
     Run KPCT with parallel processing and fallback to sequential if parallel fails.
 
@@ -2987,20 +3096,27 @@ def run_kpct_with_fallback(kpct_input_file: str, savedir: str, kpct_outprefix: s
         if logger:
             logger.info("Attempting parallel KPCT processing")
 
-        parallel_success = run_kpct_parallel(kpct_input_file, savedir, kpct_outprefix, ncpus, logger)
+        parallel_success = run_kpct_parallel(
+            kpct_input_file,
+            savedir,
+            kpct_outprefix,
+            ncpus,
+            logger,
+            verbose=verbose,
+        )
 
         if parallel_success:
             return True
         else:
             if logger:
                 logger.warning("Parallel KPCT processing failed, falling back to sequential processing")
-            typer.secho("WARNING: Parallel processing failed, trying sequential approach", fg="yellow")
+            log_warning("Parallel processing failed, trying sequential approach", logger=logger)
 
 
     if logger:
         logger.info("Running KPCT in sequential mode")
 
-    return run_kpct(kpct_input_file, savedir, kpct_outprefix, resource_log_file, logger)
+    return run_kpct(kpct_input_file, savedir, kpct_outprefix, resource_log_file, logger, verbose=verbose)
 
 
 app = typer.Typer()
@@ -3012,7 +3128,12 @@ def pipeline(genomedir: str,
              adapt_headers: bool=False,
              del_tmp: bool=True,
              calculate_complementarity: int=0,
-             lowmem: bool = typer.Option(False, "--lowmem", help="Run emapper with reduced memory footprint, omitting --dbmem flag."),
+             lowmem: bool = typer.Option(
+                 False,
+                 "--lowmem/--fullmem",
+                 "--low-mem/--full-mem",
+                 help="Run emapper with reduced memory footprint, omitting --dbmem flag.",
+             ),
              verbose: bool = typer.Option(False, "--verbose", help="Enable verbose output with detailed progress information."),
              log_level: str = typer.Option("INFO", "--log-level", "-l", help="Logging level (DEBUG, INFO, WARNING, ERROR)."),
              eggnog_data_dir: Optional[str] = typer.Option(None, "--eggnog-data-dir", help="Path to eggNOG-mapper data directory (sets EGGNOG_DATA_DIR)."),
@@ -3066,6 +3187,7 @@ def pipeline(genomedir: str,
     # Setup logging first to capture everything
     log_dir = Path(savedir) / "logs"
     logger = configure_logging(log_level, log_dir)
+    RESOURCE_SUMMARIES.clear()
     logger.info("Starting moducomp pipeline.")
     logger.info("Genome directory: %s", genomedir)
     logger.info("Output directory: %s", savedir)
@@ -3092,7 +3214,7 @@ def _run_pipeline_core(genomedir: str, savedir: str, ncpus: int, adapt_headers: 
     start_time = time.time()
 
     greetings(verbose)
-    conditional_output("\nInitializing pipeline...", "green", verbose)
+    conditional_output("Initializing pipeline...", "green", verbose)
 
     # Convert to absolute paths
     genomedir = os.path.abspath(genomedir)
@@ -3175,21 +3297,19 @@ def _run_pipeline_core(genomedir: str, savedir: str, ncpus: int, adapt_headers: 
             logger.info("Starting genome merging")
             merge_success = merge_genomes(savedir, logger, verbose)
             if not merge_success:
-                logger.error("Failed to merge genomes. Exiting pipeline.")
-                typer.secho("ERROR: Failed to merge genomes. Exiting pipeline.", fg="red")
+                log_error("Failed to merge genomes. Exiting pipeline.", logger=logger)
                 return
 
             # Run eggNOG-mapper
             logger.info(f"Starting eMapper with {ncpus} CPUs")
             emapper_success = run_emapper(savedir, ncpus, resource_log_file, lowmem, logger, verbose)
             if not emapper_success:
-                logger.error("Failed to run emapper. Exiting pipeline.")
-                typer.secho("ERROR: Failed to run emapper. Exiting pipeline.", fg="red")
+                log_error("Failed to run emapper. Exiting pipeline.", logger=logger)
                 return
 
         # Create KO matrix from annotations
         logger.info(f"Creating KO matrix from eMapper annotations: {emapper_annotation_file}")
-        create_ko_matrix_from_emapper_annotation(emapper_annotation_file, ko_matrix_path, logger)
+        create_ko_matrix_from_emapper_annotation(emapper_annotation_file, ko_matrix_path, logger, verbose)
         logger.info(f"KO matrix created: {ko_matrix_path}")
 
     # Process module completeness
@@ -3197,7 +3317,11 @@ def _run_pipeline_core(genomedir: str, savedir: str, ncpus: int, adapt_headers: 
 
     if os.path.exists(module_completeness_file):
         logger.info(f"Module completeness matrix already exists: {module_completeness_file}")
-        typer.secho(f"OK: Using existing module completeness matrix: {module_completeness_file}", fg="white")
+        conditional_output(
+            f"OK: Using existing module completeness matrix: {module_completeness_file}",
+            "white",
+            verbose,
+        )
     else:
         # Set up KPCT processing
         kpct_outprefix = "output_give_completeness"
@@ -3215,10 +3339,10 @@ def _run_pipeline_core(genomedir: str, savedir: str, ncpus: int, adapt_headers: 
         # Convert KO matrix to KPCT format if needed
         if not os.path.exists(kpct_input_file):
             logger.info(f"Converting KO matrix to KPCT format: {ko_matrix_path}")
-            ko_matrix_to_kpct_format(ko_matrix_path, savedir, calculate_complementarity, logger)
+            ko_matrix_to_kpct_format(ko_matrix_path, savedir, calculate_complementarity, logger, verbose)
         else:
             logger.info(f"KPCT input file already exists: {kpct_input_file}")
-            typer.secho(f"OK: Using existing KPCT input file: {kpct_input_file}", fg="white")
+            conditional_output(f"OK: Using existing KPCT input file: {kpct_input_file}", "white", verbose)
 
         # Run KPCT if needed
         if not kpct_file_exists:
@@ -3228,16 +3352,28 @@ def _run_pipeline_core(genomedir: str, savedir: str, ncpus: int, adapt_headers: 
 
             # Run KPCT with parallel processing
             logger.info(f"Running KPCT with parallel processing on file: {kpct_input_file}")
-            kpct_success = run_kpct_with_fallback(kpct_input_file, savedir, kpct_outprefix, ncpus, resource_log_file, logger)
+            kpct_success = run_kpct_with_fallback(
+                kpct_input_file,
+                savedir,
+                kpct_outprefix,
+                ncpus,
+                resource_log_file,
+                logger,
+                verbose=verbose,
+            )
             if not kpct_success:
                 return
         else:
             logger.info(f"KPCT output file(s) already exist with prefix '{kpct_outprefix}'")
-            typer.secho(f"OK: Using existing KPCT output files with prefix '{kpct_outprefix}'", fg="white")
+            conditional_output(
+                f"OK: Using existing KPCT output files with prefix '{kpct_outprefix}'",
+                "white",
+                verbose,
+            )
 
         # Create module completeness matrix
         logger.info(f"Creating module completeness matrix")
-        create_module_completeness_matrix(savedir, kpct_outprefix, logger)
+        create_module_completeness_matrix(savedir, kpct_outprefix, logger, verbose)
 
     # Generate complementarity reports if requested
     if calculate_complementarity >= 2:
@@ -3248,7 +3384,11 @@ def _run_pipeline_core(genomedir: str, savedir: str, ncpus: int, adapt_headers: 
             complementarity_report_file = f"{savedir}/module_completeness_complementarity_{n_members}member.tsv"
             if os.path.exists(complementarity_report_file):
                 logger.info(f"Complementarity report for {n_members}-member combinations already exists: {complementarity_report_file}")
-                typer.secho(f"OK: Using existing {n_members}-member complementarity report: {complementarity_report_file}", fg="white")
+                conditional_output(
+                    f"OK: Using existing {n_members}-member complementarity report: {complementarity_report_file}",
+                    "white",
+                    verbose,
+                )
             else:
                 logger.info(f"Generating complementarity report for {n_members}-member combinations")
                 generate_complementarity_report(savedir, n_members, logger, verbose)
@@ -3256,7 +3396,7 @@ def _run_pipeline_core(genomedir: str, savedir: str, ncpus: int, adapt_headers: 
     # Clean up temporary files if requested
     if del_tmp:
         logger.info("Cleaning up temporary files")
-        remove_temp_files(savedir, logger)
+        remove_temp_files(savedir, logger, verbose)
 
     # Generate final resource usage summary
     log_final_resource_summary(resource_log_file, start_time, logger, verbose)
@@ -3299,7 +3439,8 @@ def test(
     lowmem: bool = typer.Option(
         True,
         "--lowmem/--fullmem",
-        help="Run emapper with reduced memory footprint during the test.",
+        "--low-mem/--full-mem",
+        help="Run emapper with reduced memory footprint during the test (default: low-mem).",
     ),
     verbose: bool = typer.Option(
         True,
@@ -3331,6 +3472,7 @@ def test(
 
     log_dir = Path(savedir) / "logs"
     logger = configure_logging(log_level, log_dir)
+    RESOURCE_SUMMARIES.clear()
     logger.info("Starting moducomp test run.")
     logger.info("Test genomes: %s", test_root)
     logger.info("CLI command: %s", " ".join(shlex.quote(arg) for arg in sys.argv))
@@ -3446,6 +3588,9 @@ def download_eggnog_data(
     stdout_thread.start()
     stderr_thread.start()
 
+    output_level = logging.INFO if verbose else logging.DEBUG
+    error_level = logging.WARNING if verbose else logging.DEBUG
+
     while process.poll() is None or not stdout_queue.empty() or not stderr_queue.empty():
         now = time.time()
 
@@ -3454,9 +3599,8 @@ def download_eggnog_data(
             while True:
                 stream_type, line = stdout_queue.get_nowait()
                 if line:
-                    if verbose:
-                        print(line, flush=True)
-                    logger.info(line)
+                    if logger:
+                        _log_lines(logger, line, output_level)
         except queue.Empty:
             pass
 
@@ -3465,9 +3609,8 @@ def download_eggnog_data(
             while True:
                 stream_type, line = stderr_queue.get_nowait()
                 if line:
-                    if verbose:
-                        print(line, file=sys.stderr, flush=True)
-                    logger.warning(line)
+                    if logger:
+                        _log_lines(logger, line, error_level)
         except queue.Empty:
             pass
 
@@ -3506,8 +3649,6 @@ def download_eggnog_data(
         f"across {total_files} files"
     )
     logger.info(summary)
-    if verbose:
-        typer.secho(summary, fg="green")
 
     if returncode != 0:
         raise typer.Exit(returncode)
@@ -3578,6 +3719,7 @@ def analyze_ko_matrix(
 
     log_dir = Path(savedir) / "logs"
     logger = configure_logging(log_level, log_dir)
+    RESOURCE_SUMMARIES.clear()
 
     # Setup resource monitoring
     resource_log_file = setup_resource_logging(log_dir)
@@ -3589,11 +3731,11 @@ def analyze_ko_matrix(
         logger.info("CLI command: %s", " ".join(shlex.quote(arg) for arg in sys.argv))
 
     greetings(verbose)
-    conditional_output("\nInitializing KO matrix analysis...", "green", verbose)
+    conditional_output("Initializing KO matrix analysis...", "green", verbose)
 
 
     if not os.path.exists(kos_matrix):
-        typer.secho(f"ERROR: KO matrix file not found at: {kos_matrix}", fg="red")
+        log_error(f"KO matrix file not found at: {kos_matrix}", logger=logger)
         exit(1)
 
 
@@ -3607,7 +3749,7 @@ def analyze_ko_matrix(
 
 
     if check_final_reports_exist(savedir, calculate_complementarity, logger):
-        typer.secho("OK: All output files already exist. Skipping processing.", fg="green")
+        conditional_output("OK: All output files already exist. Skipping processing.", "green", verbose)
         logger.info("Analysis skipped as all output files already exist")
         return
 
@@ -3642,10 +3784,10 @@ def analyze_ko_matrix(
 
         if not os.path.exists(kpct_input_file):
             logger.info(f"Converting KO matrix to KPCT format: {kos_matrix}")
-            ko_matrix_to_kpct_format(kos_matrix, savedir, calculate_complementarity, logger)
+            ko_matrix_to_kpct_format(kos_matrix, savedir, calculate_complementarity, logger, verbose)
         else:
             logger.info(f"KPCT input file already exists: {kpct_input_file}")
-            typer.secho(f"OK: Using existing KPCT input file: {kpct_input_file}", fg="white")
+            conditional_output(f"OK: Using existing KPCT input file: {kpct_input_file}", "white", verbose)
 
 
         if not kpct_file_exists:
@@ -3655,22 +3797,38 @@ def analyze_ko_matrix(
 
 
             logger.info(f"Running KPCT with parallel processing on file: {kpct_input_file}")
-            kpct_success = run_kpct_with_fallback(kpct_input_file, savedir, kpct_outprefix, ncpus, resource_log_file, logger)
+            kpct_success = run_kpct_with_fallback(
+                kpct_input_file,
+                savedir,
+                kpct_outprefix,
+                ncpus,
+                resource_log_file,
+                logger,
+                verbose=verbose,
+            )
             if not kpct_success:
                 exit(1)
         else:
             logger.info(f"KPCT output file(s) already exist with prefix '{kpct_outprefix}'")
-            typer.secho(f"OK: Using existing KPCT output files with prefix '{kpct_outprefix}'", fg="white")
+            conditional_output(
+                f"OK: Using existing KPCT output files with prefix '{kpct_outprefix}'",
+                "white",
+                verbose,
+            )
 
 
         if not os.path.exists(module_completeness_file):
             if logger:
                 logger.info(f"Creating module completeness matrix")
-            create_module_completeness_matrix(savedir, kpct_outprefix, logger)
+            create_module_completeness_matrix(savedir, kpct_outprefix, logger, verbose)
         else:
             if logger:
                 logger.info(f"Module completeness matrix already exists: {module_completeness_file}")
-            typer.secho(f"OK: Using existing module completeness matrix: {module_completeness_file}", fg="white")
+            conditional_output(
+                f"OK: Using existing module completeness matrix: {module_completeness_file}",
+                "white",
+                verbose,
+            )
 
 
         if calculate_complementarity >= 2:
@@ -3682,7 +3840,11 @@ def analyze_ko_matrix(
                 complementarity_report_file = f"{savedir}/module_completeness_complementarity_{n_members}member.tsv"
                 if os.path.exists(complementarity_report_file):
                     logger.info(f"Complementarity report for {n_members}-member combinations already exists: {complementarity_report_file}")
-                    typer.secho(f"OK: Using existing {n_members}-member complementarity report: {complementarity_report_file}", fg="white")
+                    conditional_output(
+                        f"OK: Using existing {n_members}-member complementarity report: {complementarity_report_file}",
+                        "white",
+                        verbose,
+                    )
                 else:
                     logger.info(f"Generating complementarity report for {n_members}-member combinations")
                     generate_complementarity_report(savedir, n_members, logger, verbose)
@@ -3691,7 +3853,7 @@ def analyze_ko_matrix(
         if del_tmp:
             if logger:
                 logger.info("Cleaning up temporary files")
-            remove_temp_files(savedir, logger)
+            remove_temp_files(savedir, logger, verbose)
 
         # Generate final resource usage summary
         log_final_resource_summary(resource_log_file, start_time, logger, verbose)
@@ -3702,7 +3864,8 @@ def analyze_ko_matrix(
     except Exception as e:
         if logger:
             logger.error(f"Error in KPCT analysis: {str(e)}", exc_info=True)
-        typer.secho(f"ERROR: Error in KPCT analysis: {str(e)}", fg="red")
+        else:
+            log_error(f"Error in KPCT analysis: {str(e)}", logger=logger)
         exit(1)
 
 

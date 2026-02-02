@@ -52,6 +52,8 @@ Small test data sets ship with `moducomp`. After installation you can confirm th
 moducomp test --ncpus 16 --calculate-complementarity 2 --eggnog-data-dir "$EGGNOG_DATA_DIR"
 ```
 
+The test command runs in low-memory mode by default. If you have plenty of RAM and want full-memory mode, add `--fullmem` (or `--full-mem`).
+
 ### Developer install (Pixi)
 
 If you want to download the code and develop locally:
@@ -100,7 +102,7 @@ You should see the command line help without errors.
 
 ### ⚠️ Important note 2
 
-`moducomp` is specifically designed for large scale analysis of microbiomes with hundreds of members, and works on Linux systems with at least **64GB of RAM**. Nevertheless, it can be run on **smaller systems with less RAM, using the flag `--lowmem` when running the `pipeline` command**.
+`moducomp` is specifically designed for large scale analysis of microbiomes with hundreds of members, and works on Linux systems with at least **64GB of RAM**. Nevertheless, it can be run on **smaller systems with less RAM, using the flag `--lowmem` (`--low-mem`) when running the `pipeline` command**. The `test` command uses low-memory mode by default and can be switched to full memory with `--fullmem` (`--full-mem`).
 
 ### Notes on bundled test data
 
@@ -137,7 +139,7 @@ moducomp pipeline \
     --ncpus <number_of_cpus_to_use> \
     --calculate-complementarity <N>  # 0 to disable, 2 for 2-member, 3 for 3-member complementarity.
     # Optional flags:
-    # --lowmem                    # Optional: Use this if you have less than 64GB of RAM
+    # --lowmem/--fullmem          # Optional: Use low-mem if you have less than 64GB of RAM (default is full mem)
     # --adapt-headers             # If your FASTA headers need modification
     # --del-tmp                   # To delete temporary files
     # --eggnog-data-dir /path     # If EGGNOG_DATA_DIR is not set
