@@ -419,16 +419,38 @@ def _set_configured_eggnog_dir(path: Path, logger: Optional[logging.Logger] = No
 
 
 def _find_eggnog_downloader() -> Optional[str]:
-    for name in ("download_eggnog_data.py", "download_eggnog_data"):
-        path = shutil.which(name)
-        if path:
+    names = ("download_eggnog_data.py", "download_eggnog_data")
+    candidate_dirs = []
+    try:
+        candidate_dirs.append(Path(sys.executable).resolve().parent)
+    except Exception:
+        pass
+    candidate_dirs.extend(
+        [
+            Path(sys.prefix) / "bin",
+            Path(sys.exec_prefix) / "bin",
+        ]
+    )
+    for path_entry in os.environ.get("PATH", "").split(os.pathsep):
+        if path_entry:
+            candidate_dirs.append(Path(path_entry))
+
+    seen = set()
+    for directory in candidate_dirs:
+        if not directory or str(directory) in seen:
+            continue
+        seen.add(str(directory))
+        for name in names:
+            candidate = directory / name
+            if not candidate.is_file():
+                continue
             try:
-                wrapper_text = Path(path).read_text(encoding="utf-8", errors="ignore")
+                wrapper_text = candidate.read_text(encoding="utf-8", errors="ignore")
             except OSError:
                 wrapper_text = ""
             if "moducomp.moducomp" in wrapper_text:
                 continue
-            return path
+            return str(candidate)
     return None
 
 def run_subprocess_with_logging(
@@ -3872,7 +3894,7 @@ def setup(
             emit_error(message, logger)
             raise typer.Exit(1)
 
-        cmd = [downloader, "--data_dir", str(target_dir)]
+        cmd = [sys.executable, downloader, "--data_dir", str(target_dir)]
         if yes:
             cmd.append("-y")
         if force:
