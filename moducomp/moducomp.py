@@ -3762,7 +3762,19 @@ def download_eggnog_data(
     data_dir.mkdir(parents=True, exist_ok=True)
     logger.info("Downloading eggNOG data into %s", data_dir)
 
-    downloader = shutil.which("download_eggnog_data.py")
+    downloader = None
+    for path_entry in os.environ.get("PATH", "").split(os.pathsep):
+        candidate = Path(path_entry) / "download_eggnog_data.py"
+        if not candidate.is_file() or not os.access(candidate, os.X_OK):
+            continue
+        try:
+            wrapper_text = candidate.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            wrapper_text = ""
+        if "moducomp.moducomp" in wrapper_text and "download_eggnog_data_cli" in wrapper_text:
+            continue
+        downloader = str(candidate)
+        break
     if downloader is None:
         message = (
             "download_eggnog_data.py not found in PATH. "
@@ -3883,9 +3895,10 @@ def download_eggnog_data(
 
 
 def download_eggnog_data_cli() -> None:
-    """Entry point for the download-eggnog-data script."""
+    """Entry point for download-eggnog-data/download_eggnog_data.py scripts."""
+    prog = Path(sys.argv[0]).name if sys.argv else "download-eggnog-data"
     app(
-        prog_name="download-eggnog-data",
+        prog_name=prog,
         args=["download-eggnog-data", *sys.argv[1:]],
     )
 

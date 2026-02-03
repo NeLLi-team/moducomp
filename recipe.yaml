@@ -15,6 +15,8 @@ build:
   python:
     entry_points:
     - moducomp = moducomp.moducomp:app
+    - download-eggnog-data = moducomp.moducomp:download_eggnog_data_cli
+    - download_eggnog_data.py = moducomp.moducomp:download_eggnog_data_cli
   noarch: python
 
 requirements:
