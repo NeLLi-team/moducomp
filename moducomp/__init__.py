@@ -2,7 +2,7 @@
 moducomp: metabolic module completeness and complementarity for microbiomes.
 """
 
-__version__ = "0.7.16"
+__version__ = "0.7.17"
 __author__ = "Juan C. Villada"
 __email__ = "jvillada@lbl.gov"
 __title__ = "moducomp"
