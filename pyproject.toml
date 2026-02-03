@@ -29,7 +29,7 @@ dynamic = ["version", "description"]
 [project.scripts]
 moducomp = "moducomp.moducomp:app"
 download-eggnog-data = "moducomp.moducomp:download_eggnog_data_cli"
-download_eggnog_data.py = "moducomp.moducomp:download_eggnog_data_cli"
+"download_eggnog_data.py" = "moducomp.moducomp:download_eggnog_data_cli"
 
 [project.urls]
 Homepage = "https://github.com/NeLLi-team/moducomp"
