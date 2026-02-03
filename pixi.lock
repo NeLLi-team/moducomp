@@ -1340,8 +1340,8 @@ packages:
   timestamp: 1737229717596
 - pypi: ./
   name: moducomp
-  version: 0.7.9
-  sha256: 69bbe817500b6ae5011deb9c4ec4639f8a4c8b54a275b58ac1e8b3ad2d84e798
+  version: 0.7.14
+  sha256: 026a6159ce9247e5ce3136eee254748b471c239b82283298602c7c42837348be
   requires_dist:
   - typer>=0.9.1,<0.10.0
   - pandas>=1.5,<2.3

@@ -128,7 +128,7 @@ This section lists all CLI options implemented today, along with their default v
 | `--calculate-complementarity`, `-c` | `0` | Complementarity size to compute (0 disables). |
 | `--adapt-headers/--no-adapt-headers` | `false` | Adapt FASTA headers to `genome|protein_N`. |
 | `--del-tmp/--keep-tmp` | `true` | Delete temporary files after completion. |
-| `--lowmem/--fullmem` (`--low-mem/--full-mem`) | `fullmem` | Run eggNOG-mapper without `--dbmem` to reduce RAM. |
+| `--lowmem/--fullmem` (`--low-mem/--full-mem`) | `lowmem` | Run eggNOG-mapper without `--dbmem` to reduce RAM. |
 | `--verbose/--quiet` | `false` | Enable verbose progress output. |
 | `--validate/--no-validate` | `validate` | Run post-run validation checks. |
 | `--validate-report/--no-validate-report` | `validate-report` | Write `validation_report.json` in the output directory. |
@@ -234,7 +234,7 @@ moducomp validate /path/to/output --strict
 
 ### ⚠️ Important note 2
 
-`moducomp` is specifically designed for large scale analysis of microbiomes with hundreds of members, and works on Linux systems with at least **64GB of RAM**. Nevertheless, it can be run on **smaller systems with less RAM, using the flag `--lowmem` (`--low-mem`) when running the `pipeline` command**. The `test` command uses low-memory mode by default and can be switched to full memory with `--fullmem` (`--full-mem`).
+`moducomp` is specifically designed for large scale analysis of microbiomes with hundreds of members, and works on Linux systems with at least **64GB of RAM**. For robustness, **low-memory mode is now the default** for `pipeline` and `test`. If you have ample RAM and want full-memory mode, add `--fullmem` (`--full-mem`).
 
 ### Notes on bundled test data
 
@@ -271,7 +271,7 @@ moducomp pipeline \
     --ncpus <number_of_cpus_to_use> \
     --calculate-complementarity <N>  # 0 to disable, 2 for 2-member, 3 for 3-member complementarity.
     # Optional flags:
-    # --lowmem/--fullmem          # Optional: Use low-mem if you have less than 64GB of RAM (default is full mem)
+    # --fullmem                  # Optional: Use full-mem if you have ample RAM (default is low-mem)
     # --adapt-headers             # If your FASTA headers need modification
     # --del-tmp/--keep-tmp        # Delete or keep temporary files
     # --eggnog-data-dir /path     # If EGGNOG_DATA_DIR is not set
@@ -324,8 +324,11 @@ moducomp pipeline ./large_genome_collection ./output_large --ncpus 32 --calculat
 # For moderate datasets with verbose output
 moducomp analyze-ko-matrix ./ko_matrix.csv ./output_moderate --ncpus 16 --calculate-complementarity 2 --verbose
 
-# For systems with limited memory
-moducomp pipeline ./genomes ./output_lowmem --ncpus 8 --lowmem --calculate-complementarity 2
+# For systems with limited memory (default behavior)
+moducomp pipeline ./genomes ./output_lowmem --ncpus 8 --calculate-complementarity 2
+
+# For systems with ample RAM
+moducomp pipeline ./genomes ./output_fullmem --ncpus 8 --fullmem --calculate-complementarity 2
 ```
 
 ## Expected outputs

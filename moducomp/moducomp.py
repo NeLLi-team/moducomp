@@ -3272,7 +3272,7 @@ def pipeline(
                  help="Complementarity size to compute (0 disables).",
              ),
              lowmem: bool = typer.Option(
-                 False,
+                 True,
                  "--lowmem/--fullmem",
                  "--low-mem/--full-mem",
                  help="Run eggNOG-mapper with reduced memory footprint by omitting --dbmem.",
@@ -3449,6 +3449,7 @@ def _run_pipeline_core(
     tmp_emapper_output_dir = f"{get_tmp_dir(savedir)}/emapper_output"
     tmp_emapper_file = f"{tmp_emapper_output_dir}/emapper_out.emapper.annotations"
     ko_matrix_path = f"{savedir}/kos_matrix.csv"
+    kpct_outprefix = "output_give_completeness"
 
     # Process annotations and create KO matrix
     if os.path.exists(ko_matrix_path):
@@ -3517,7 +3518,6 @@ def _run_pipeline_core(
         )
     else:
         # Set up KPCT processing
-        kpct_outprefix = "output_give_completeness"
         kpct_input_file = os.path.join(savedir, "ko_file_for_kpct.txt")
 
         # Check if KPCT output already exists
@@ -3602,7 +3602,7 @@ def _run_pipeline_core(
         try:
             validate(
                 savedir=savedir,
-                mode="ko-matrix",
+                mode="pipeline",
                 calculate_complementarity=calculate_complementarity,
                 kpct_outprefix=kpct_outprefix,
                 strict=validate_strict,
@@ -4151,24 +4151,32 @@ def analyze_ko_matrix(
         # Generate final resource usage summary
         log_final_resource_summary(resource_log_file, start_time, logger, verbose)
 
-        # Display pipeline completion summary
-        display_pipeline_completion_summary(start_time, savedir, logger, verbose)
-
         if run_validation:
             logger.info("Running post-run validation checks.")
             report_path = None
             if validation_report:
                 report_path = os.path.join(savedir, "validation_report.json")
-            validate(
-                savedir=savedir,
-                mode="ko-matrix",
-                calculate_complementarity=calculate_complementarity,
-                kpct_outprefix=kpct_outprefix,
-                strict=validate_strict,
-                report=report_path,
-                verbose=verbose,
-                log_level=log_level,
-            )
+            try:
+                validate(
+                    savedir=savedir,
+                    mode="ko-matrix",
+                    calculate_complementarity=calculate_complementarity,
+                    kpct_outprefix=kpct_outprefix,
+                    strict=validate_strict,
+                    report=report_path,
+                    verbose=verbose,
+                    log_level=log_level,
+                )
+            except typer.Exit as exc:
+                if logger:
+                    logger.error("Validation failed with exit code %s.", exc.exit_code)
+                    logger.error("Outputs written to: %s", savedir)
+                    if report_path:
+                        logger.error("Validation report: %s", report_path)
+                raise
+
+        # Display pipeline completion summary
+        display_pipeline_completion_summary(start_time, savedir, logger, verbose)
 
     except Exception as e:
         if logger:
@@ -4753,7 +4761,7 @@ def validate(
             )
 
     # Complementarity checks
-    comp_pattern = re.compile(r"module_completeness_complementarity_(\\d+)member\\.tsv$")
+    comp_pattern = re.compile(r"module_completeness_complementarity_(\d+)member\.tsv$")
     comp_files: Dict[int, Path] = {}
     for file_path in Path(savedir).glob("module_completeness_complementarity_*member.tsv"):
         match = comp_pattern.match(file_path.name)
