@@ -38,13 +38,19 @@ pixi global install \
 `moducomp` needs the eggNOG-mapper database to run. The primary (recommended) way to download it is using the `download_eggnog_data.py` wrapper, which mirrors the upstream downloader behavior. For upstream details, see the eggNOG-mapper setup guide: [eggNOG-mapper database setup](https://github.com/eggnogdb/eggnog-mapper/wiki/eggNOG-mapper-v2.1.5-to-v2.1.13#user-content-Setup).
 
 ```bash
+download_eggnog_data.py
+```
+
+By default, the data are stored in `${XDG_DATA_HOME:-~/.local/share}/moducomp/eggnog`, and `moducomp` will auto-detect that location without needing `EGGNOG_DATA_DIR`.
+
+To use a custom location:
+
+```bash
 export EGGNOG_DATA_DIR="/path/to/eggnog-data"
 download_eggnog_data.py --eggnog-data-dir "$EGGNOG_DATA_DIR"
 # equivalent:
 # moducomp download-eggnog-data --eggnog-data-dir "$EGGNOG_DATA_DIR"
 ```
-
-If `EGGNOG_DATA_DIR` is not set, the downloader defaults to `${XDG_DATA_HOME:-~/.local/share}/moducomp/eggnog`.
 
 ### Quick test
 

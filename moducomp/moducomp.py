@@ -145,15 +145,23 @@ def require_eggnog_data_dir(eggnog_data_dir: Optional[str], logger: Optional[log
     if eggnog_data_dir:
         os.environ["EGGNOG_DATA_DIR"] = eggnog_data_dir
 
-    env_value = os.environ.get("EGGNOG_DATA_DIR", "")
-    if not env_value.strip():
-        message = (
-            "EGGNOG_DATA_DIR is required to run eggNOG-mapper. "
-            "Set the EGGNOG_DATA_DIR environment variable or pass --eggnog-data-dir. "
-            "Download the data with: download_eggnog_data.py or moducomp download-eggnog-data"
-        )
-        emit_error(message, logger)
-        raise typer.Exit(1)
+    env_value = os.environ.get("EGGNOG_DATA_DIR", "").strip()
+    if not env_value:
+        default_dir = default_eggnog_data_dir()
+        if default_dir.exists() and default_dir.is_dir() and any(default_dir.iterdir()):
+            os.environ["EGGNOG_DATA_DIR"] = str(default_dir)
+            env_value = str(default_dir)
+            if logger:
+                logger.info("EGGNOG_DATA_DIR not set; using default %s", env_value)
+        else:
+            message = (
+                "EGGNOG_DATA_DIR is required to run eggNOG-mapper. "
+                "Set the EGGNOG_DATA_DIR environment variable or pass --eggnog-data-dir. "
+                f"Default location is {default_dir}. "
+                "Download the data with: download_eggnog_data.py or moducomp download-eggnog-data"
+            )
+            emit_error(message, logger)
+            raise typer.Exit(1)
 
     data_dir = Path(env_value).expanduser().resolve()
     if not data_dir.exists() or not data_dir.is_dir():
