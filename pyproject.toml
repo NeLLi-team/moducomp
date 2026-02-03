@@ -58,3 +58,6 @@ test = "python -m moducomp test --ncpus 2 --calculate-complementarity 2"
 download-eggnog-data = "python -m moducomp download-eggnog-data"
 pipeline = "python -m moducomp pipeline --help"
 analyze_ko_matrix = "python -m moducomp analyze-ko-matrix --help"
+
+[tool.flit.sdist]
+include = ["scripts/download_eggnog_data.py"]

@@ -12,6 +12,7 @@ source:
 build:
   script:
     - ${{ PYTHON }} -m pip install .
+    - install -m 0755 scripts/download_eggnog_data.py ${{ PREFIX }}/bin/download_eggnog_data.py
   python:
     entry_points:
     - moducomp = moducomp.moducomp:app
