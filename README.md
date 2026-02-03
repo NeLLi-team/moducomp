@@ -273,15 +273,36 @@ moducomp analyze-ko-matrix ./ko_matrix.csv ./output_moderate --ncpus 16 --calcul
 moducomp pipeline ./genomes ./output_lowmem --ncpus 8 --lowmem --calculate-complementarity 2
 ```
 
-## Output files
+## Expected outputs
 
-`moducomp` generates several output files in the specified output directory:
+The sections below describe the expected output files, naming conventions, and the column-level meaning of each file. These details are the same for `moducomp pipeline` and `moducomp test` (pipeline mode), and the subset noted for `moducomp analyze-ko-matrix` (KO-matrix mode).
 
-- **`kos_matrix.csv`**: Matrix of KO counts for each genome
-- **`module_completeness.tsv`**: Module completeness scores for individual genomes and combinations
-- **`module_completeness_complementarity_Nmember.tsv`**: Complementarity reports (if requested)
-- **`logs/resource_usage_YYYYMMDD_HHMMSS.log`**: Resource monitoring log with CPU, memory, and runtime metrics for reproducibility
-- **`logs/moducomp.log`**: Detailed pipeline execution log with a per-command resource summary at the end of the run
+**Naming conventions**
+
+Genome identifiers are stored as `taxon_oid`. In pipeline mode, ModuComp expects protein headers in the format `genome_id|protein_id`. If you set `--adapt-headers`, ModuComp rewrites headers to `>genomeName|protein_N`, where `genomeName` is the FAA filename stem. Combination identifiers use `__` (double underscore), for example `GenomeA__GenomeB`, and `n_members` in `module_completeness.tsv` records the size of each combination.
+
+**Pipeline mode outputs (`moducomp pipeline`, `moducomp test`)**
+
+- `emapper_out.emapper.annotations`: Full eggNOG-mapper annotations. The `#query` column must match `genome_id|protein_id`. `KEGG_ko` entries are prefixed `ko:KXXXXX` and are converted to `KXXXXX` for downstream matrices.
+- `kos_matrix.csv`: Genome × KO count matrix. Columns: `taxon_oid` followed by KO IDs (e.g., `K00001`). Values are integer protein counts per KO.
+- `ko_file_for_kpct.txt`: KPCT input file. Each line starts with `taxon_oid` followed by the set of KO IDs present in that genome or combination. If `--calculate-complementarity` is `N>=2`, combinations up to `N` are included as `GenomeA__GenomeB`.
+- `output_give_completeness_contigs.with_weights.tsv`: KPCT module results per genome/combination. Columns: `contig` (genome/combination ID), `module_accession`, `completeness` (0–100), `pathway_name`, `pathway_class`, `matching_ko` (KO weights), `missing_ko`.
+- `output_give_completeness_pathways.with_weights.tsv`: Same rows and order as the contigs file, but without the `contig` column. This is provided for compatibility with legacy tools; prefer the contigs file when you need genome-level provenance.
+- `module_completeness.tsv`: Pivoted module completeness matrix. Columns: `n_members`, `taxon_oid`, followed by KEGG module IDs (`M00001`, …). Values are numeric percentages in the range 0–100.
+- `module_completeness_complementarity_Nmember.tsv`: Complementarity report for `N`-member combinations (only when `--calculate-complementarity N` is set). Columns: `taxon_oid_1..N`, `completeness_taxon_oid_1..N`, `module_id`, `module_name`, `pathway_class`, `matching_ko`, `proteins_taxon_oid_1..N`. Protein fields list contributing proteins per KO (from eggNOG-mapper) as `{'KXXXXX': 'genome|protein'}`.
+- `logs/moducomp.log`: Detailed run log with structured progress messages and per-command resource summaries.
+- `logs/resource_usage_YYYYMMDD_HHMMSS.log`: Resource monitoring log capturing wall time, CPU time, CPU utilization, peak RAM, and exit code for each monitored command.
+- `tmp/` (only if `--keep-tmp`): Intermediate files such as `merged_genomes.faa`, `emapper_output/`, and KPCT chunk outputs.
+
+**KO-matrix mode outputs (`moducomp analyze-ko-matrix`)**
+
+- `kos_matrix.csv`: A copy of the input KO matrix (same format as above).
+- `ko_file_for_kpct.txt`: KPCT input generated from the KO matrix. If `--calculate-complementarity` is set, combination lines are added using `GenomeA__GenomeB` identifiers.
+- `output_give_completeness_contigs.with_weights.tsv`: KPCT module results per genome/combination (same format as pipeline mode).
+- `output_give_completeness_pathways.with_weights.tsv`: Same rows as the contigs file, without the `contig` column.
+- `module_completeness.tsv`: Module completeness matrix (same format as pipeline mode).
+- `module_completeness_complementarity_Nmember.tsv`: Complementarity report. Protein contribution columns are filled with `No protein data available for <genome>` because no eggNOG-mapper annotations are available in KO-matrix mode.
+- `logs/moducomp.log` and `logs/resource_usage_YYYYMMDD_HHMMSS.log`: Standard run logs and resource summaries.
 
 ## Citation
 Villada, JC. & Schulz, F. (2025). Assessment of metabolic module completeness of genomes and metabolic complementarity in microbiomes with `moducomp` . `moducomp` (v0.5.1) Zenodo. https://doi.org/10.5281/zenodo.16116092
