@@ -23,12 +23,15 @@ License: See LICENSE.txt
 Version: See moducomp.__version__ for current version
 """
 
+import csv
 import datetime
 import glob
 import itertools
+import json
 import logging
 import os
 import queue
+import re
 import shlex
 import shutil
 import subprocess
@@ -221,6 +224,112 @@ def count_files(path: Path) -> int:
     for _, _, files in os.walk(path):
         total += len(files)
     return total
+
+
+def _find_emapper_annotations(savedir: Union[str, Path]) -> Optional[Path]:
+    savedir_path = Path(savedir)
+    candidates = [
+        savedir_path / "emapper_out.emapper.annotations",
+        savedir_path / "tmp" / "emapper_output" / "emapper_out.emapper.annotations",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _read_ko_matrix_file(kos_matrix: Union[str, Path], logger: Optional[logging.Logger] = None) -> Tuple[pd.DataFrame, str]:
+    kos_matrix = str(kos_matrix)
+    initial_delimiter = "," if kos_matrix.lower().endswith(".csv") else "\t"
+    delimiter_used = initial_delimiter
+    try:
+        if logger:
+            logger.info(f"Reading KO matrix file with delimiter '{initial_delimiter}': {kos_matrix}")
+        ko_df = pd.read_csv(kos_matrix, sep=initial_delimiter)
+    except Exception as e_initial:
+        if kos_matrix.lower().endswith(".tsv") and initial_delimiter == "\t":
+            try:
+                if logger:
+                    logger.info(f"Tab-delimited read failed. Attempting comma delimiter for {kos_matrix}.")
+                ko_df = pd.read_csv(kos_matrix, sep=",")
+                delimiter_used = ","
+            except Exception as e_fallback:
+                if logger:
+                    logger.error(f"Fallback comma delimiter also failed: {e_fallback}")
+                raise e_fallback
+        else:
+            if logger:
+                logger.error(f"Failed to read KO matrix {kos_matrix}: {e_initial}")
+            raise e_initial
+    return ko_df, delimiter_used
+
+
+def _read_kpct_input_file(kpct_input_file: Union[str, Path]) -> Dict[str, Set[str]]:
+    genome_to_kos: Dict[str, Set[str]] = {}
+    with open(kpct_input_file, "r") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) < 2:
+                continue
+            genome_id = parts[0]
+            kos = {ko for ko in parts[1:] if ko}
+            genome_to_kos[genome_id] = kos
+    return genome_to_kos
+
+
+def _compare_kpct_outputs(contigs_file: Path, pathways_file: Path) -> Tuple[bool, str]:
+    """
+    Compare KPCT contigs and pathways outputs. Returns (match, detail).
+    """
+    with contigs_file.open("r") as contigs, pathways_file.open("r") as pathways:
+        contig_header = contigs.readline().rstrip("\n").split("\t")
+        pathway_header = pathways.readline().rstrip("\n").split("\t")
+        if contig_header[1:] != pathway_header:
+            return False, "Header mismatch between contigs and pathways outputs."
+
+        line_no = 0
+        for contig_line, pathway_line in zip(contigs, pathways):
+            line_no += 1
+            contig_line = contig_line.rstrip("\n")
+            pathway_line = pathway_line.rstrip("\n")
+            if not contig_line and not pathway_line:
+                continue
+            if contig_line.split("\t")[1:] != pathway_line.split("\t"):
+                return False, f"Row mismatch at line {line_no}."
+
+        # Check for extra trailing lines in either file
+        extra_contig = any(line.strip() for line in contigs)
+        extra_path = any(line.strip() for line in pathways)
+        if extra_contig or extra_path:
+            return False, "Row count mismatch between contigs and pathways outputs."
+
+    return True, "Contigs and pathways outputs match."
+
+
+def _record_validation_check(report: Dict[str, Any], name: str, status: str, detail: str) -> None:
+    entry = {"name": name, "status": status, "detail": detail}
+    report["checks"].append(entry)
+    if status == "fail":
+        report["errors"].append(f"{name}: {detail}")
+    elif status == "warn":
+        report["warnings"].append(f"{name}: {detail}")
+
+
+def _count_emapper_header_issues(emapper_file: Path) -> Tuple[int, int]:
+    total = 0
+    bad = 0
+    with emapper_file.open("r") as handle:
+        for line in handle:
+            if line.startswith("#"):
+                continue
+            total += 1
+            query = line.split("\t", 1)[0]
+            if "|" not in query:
+                bad += 1
+    return total, bad
 
 
 def default_eggnog_data_dir() -> Path:
@@ -3165,6 +3274,21 @@ def pipeline(
                  "--verbose/--quiet",
                  help="Enable verbose output with detailed progress information.",
              ),
+             run_validation: bool = typer.Option(
+                 True,
+                 "--validate/--no-validate",
+                 help="Run post-run validation checks (default: enabled).",
+             ),
+             validation_report: bool = typer.Option(
+                 True,
+                 "--validate-report/--no-validate-report",
+                 help="Write validation_report.json in the output directory.",
+             ),
+             validate_strict: bool = typer.Option(
+                 False,
+                 "--validate-strict/--validate-lenient",
+                 help="Treat validation warnings as failures.",
+             ),
              log_level: str = typer.Option("INFO", "--log-level", "-l", help="Logging level (DEBUG, INFO, WARNING, ERROR)."),
              eggnog_data_dir: Optional[str] = typer.Option(
                  None,
@@ -3233,15 +3357,42 @@ def pipeline(
         logger.info(f"Resource monitoring enabled. Log file: {resource_log_file}")
 
     # Run the main pipeline logic
-    _run_pipeline_core(genomedir, savedir, ncpus, adapt_headers, del_tmp,
-                      calculate_complementarity, lowmem, verbose, logger, resource_log_file,
-                      eggnog_data_dir)
+    _run_pipeline_core(
+        genomedir,
+        savedir,
+        ncpus,
+        adapt_headers,
+        del_tmp,
+        calculate_complementarity,
+        lowmem,
+        verbose,
+        logger,
+        resource_log_file,
+        eggnog_data_dir,
+        run_validation,
+        validation_report,
+        validate_strict,
+        log_level,
+    )
 
 
-def _run_pipeline_core(genomedir: str, savedir: str, ncpus: int, adapt_headers: bool,
-                      del_tmp: bool, calculate_complementarity: int, lowmem: bool,
-                      verbose: bool, logger: logging.Logger, resource_log_file: str,
-                      eggnog_data_dir: Optional[str]) -> None:
+def _run_pipeline_core(
+    genomedir: str,
+    savedir: str,
+    ncpus: int,
+    adapt_headers: bool,
+    del_tmp: bool,
+    calculate_complementarity: int,
+    lowmem: bool,
+    verbose: bool,
+    logger: logging.Logger,
+    resource_log_file: str,
+    eggnog_data_dir: Optional[str],
+    run_validation: bool,
+    validation_report: bool,
+    validate_strict: bool,
+    log_level: str,
+) -> None:
     """
     Core pipeline logic separated for resource monitoring.
     """
@@ -3435,6 +3586,30 @@ def _run_pipeline_core(genomedir: str, savedir: str, ncpus: int, adapt_headers: 
     # Generate final resource usage summary
     log_final_resource_summary(resource_log_file, start_time, logger, verbose)
 
+    if run_validation:
+        logger.info("Running post-run validation checks.")
+        report_path = None
+        if validation_report:
+            report_path = os.path.join(savedir, "validation_report.json")
+        try:
+            validate(
+                savedir=savedir,
+                mode="ko-matrix",
+                calculate_complementarity=calculate_complementarity,
+                kpct_outprefix=kpct_outprefix,
+                strict=validate_strict,
+                report=report_path,
+                verbose=verbose,
+                log_level=log_level,
+            )
+        except typer.Exit as exc:
+            if logger:
+                logger.error("Validation failed with exit code %s.", exc.exit_code)
+                logger.error("Outputs written to: %s", savedir)
+                if report_path:
+                    logger.error("Validation report: %s", report_path)
+            raise
+
     # Display pipeline completion summary
     display_pipeline_completion_summary(start_time, savedir, logger, verbose)
 
@@ -3481,6 +3656,21 @@ def test(
         "--verbose/--quiet",
         help="Enable verbose output with detailed progress information.",
     ),
+    run_validation: bool = typer.Option(
+        True,
+        "--validate/--no-validate",
+        help="Run post-run validation checks (default: enabled).",
+    ),
+    validation_report: bool = typer.Option(
+        True,
+        "--validate-report/--no-validate-report",
+        help="Write validation_report.json in the output directory.",
+    ),
+    validate_strict: bool = typer.Option(
+        False,
+        "--validate-strict/--validate-lenient",
+        help="Treat validation warnings as failures.",
+    ),
     log_level: str = typer.Option(
         "INFO",
         "--log-level",
@@ -3526,6 +3716,10 @@ def test(
         logger,
         resource_log_file,
         eggnog_data_dir,
+        run_validation,
+        validation_report,
+        validate_strict,
+        log_level,
     )
 
 
@@ -3735,6 +3929,21 @@ def analyze_ko_matrix(
         "--verbose/--quiet",
         help="Enable verbose output with detailed progress information.",
     ),
+    run_validation: bool = typer.Option(
+        True,
+        "--validate/--no-validate",
+        help="Run post-run validation checks (default: enabled).",
+    ),
+    validation_report: bool = typer.Option(
+        True,
+        "--validate-report/--no-validate-report",
+        help="Write validation_report.json in the output directory.",
+    ),
+    validate_strict: bool = typer.Option(
+        False,
+        "--validate-strict/--validate-lenient",
+        help="Treat validation warnings as failures.",
+    ),
     log_level: str = typer.Option("INFO", "--log-level", "-l", help="Logging level (DEBUG, INFO, WARNING, ERROR)."),
     ) -> None:
     """
@@ -3924,12 +4133,773 @@ def analyze_ko_matrix(
         # Display pipeline completion summary
         display_pipeline_completion_summary(start_time, savedir, logger, verbose)
 
+        if run_validation:
+            logger.info("Running post-run validation checks.")
+            report_path = None
+            if validation_report:
+                report_path = os.path.join(savedir, "validation_report.json")
+            validate(
+                savedir=savedir,
+                mode="ko-matrix",
+                calculate_complementarity=calculate_complementarity,
+                kpct_outprefix=kpct_outprefix,
+                strict=validate_strict,
+                report=report_path,
+                verbose=verbose,
+                log_level=log_level,
+            )
+
     except Exception as e:
         if logger:
             logger.error(f"Error in KPCT analysis: {str(e)}", exc_info=True)
         else:
             log_error(f"Error in KPCT analysis: {str(e)}", logger=logger)
         exit(1)
+
+
+@app.command()
+def validate(
+    savedir: str = typer.Argument(
+        ...,
+        help="Output directory to validate (from pipeline or analyze-ko-matrix).",
+    ),
+    mode: str = typer.Option(
+        "auto",
+        "--mode",
+        help="Validation mode: auto, pipeline, or ko-matrix.",
+    ),
+    calculate_complementarity: Optional[int] = typer.Option(
+        None,
+        "--calculate-complementarity",
+        "-c",
+        help="Expected complementarity size (0 disables). If omitted, detects from outputs.",
+    ),
+    kpct_outprefix: str = typer.Option(
+        "output_give_completeness",
+        "--kpct-outprefix",
+        help="Prefix for KPCT output files (use if you changed it in analyze-ko-matrix).",
+    ),
+    strict: bool = typer.Option(
+        False,
+        "--strict/--lenient",
+        help="Treat warnings as failures.",
+    ),
+    report: Optional[str] = typer.Option(
+        None,
+        "--report",
+        help="Write JSON validation report to this path.",
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose/--quiet",
+        help="Enable verbose output with detailed progress information.",
+    ),
+    log_level: str = typer.Option(
+        "INFO",
+        "--log-level",
+        "-l",
+        help="Logging level (DEBUG, INFO, WARNING, ERROR).",
+    ),
+) -> None:
+    """Run scientific validation checks on a ModuComp output directory."""
+    savedir = os.path.abspath(savedir)
+    if not os.path.isdir(savedir):
+        log_error(f"Output directory not found: {savedir}")
+        raise typer.Exit(1)
+
+    log_dir = Path(savedir) / "logs"
+    logger = configure_logging(log_level, log_dir)
+    RESOURCE_SUMMARIES.clear()
+    logger.info("Starting moducomp validation.")
+    logger.info("Output directory: %s", savedir)
+    logger.info("CLI command: %s", " ".join(shlex.quote(arg) for arg in sys.argv))
+
+    mode = mode.lower().strip()
+    if mode not in {"auto", "pipeline", "ko-matrix"}:
+        log_error(f"Invalid mode '{mode}'. Use auto, pipeline, or ko-matrix.", logger=logger)
+        raise typer.Exit(1)
+
+    report_data: Dict[str, Any] = {
+        "savedir": savedir,
+        "mode": mode,
+        "timestamp": datetime.datetime.now().isoformat(),
+        "checks": [],
+        "warnings": [],
+        "errors": [],
+        "stats": {},
+    }
+
+    emapper_file = _find_emapper_annotations(savedir)
+    if mode == "auto":
+        mode = "pipeline" if emapper_file else "ko-matrix"
+        report_data["mode"] = mode
+
+    if mode == "pipeline" and not emapper_file:
+        _record_validation_check(
+            report_data,
+            "emapper_annotations",
+            "fail",
+            "Pipeline mode selected but emapper annotations were not found.",
+        )
+        logger.error("Pipeline mode requires emapper annotations. Validation aborted.")
+        if report:
+            with open(report, "w") as handle:
+                json.dump(report_data, handle, indent=2)
+        raise typer.Exit(1)
+
+    if mode == "ko-matrix" and emapper_file:
+        _record_validation_check(
+            report_data,
+            "emapper_annotations",
+            "warn",
+            f"KO-matrix mode selected but emapper annotations exist at {emapper_file}.",
+        )
+
+    kos_matrix_path = Path(savedir) / "kos_matrix.csv"
+    kpct_input_file = Path(savedir) / "ko_file_for_kpct.txt"
+    module_matrix_file = Path(savedir) / "module_completeness.tsv"
+
+    contigs_file = None
+    pathways_file = None
+    contigs_candidates = [
+        Path(savedir) / f"{kpct_outprefix}_contigs.with_weights.tsv",
+        Path(savedir) / f"{kpct_outprefix}_contigs.tsv",
+    ]
+    pathways_candidates = [
+        Path(savedir) / f"{kpct_outprefix}_pathways.with_weights.tsv",
+        Path(savedir) / f"{kpct_outprefix}_pathways.tsv",
+    ]
+    for candidate in contigs_candidates:
+        if candidate.exists():
+            contigs_file = candidate
+            break
+    for candidate in pathways_candidates:
+        if candidate.exists():
+            pathways_file = candidate
+            break
+
+    if not contigs_file and not pathways_file:
+        _record_validation_check(
+            report_data,
+            "kpct_outputs",
+            "warn",
+            f"No KPCT output files found for prefix '{kpct_outprefix}'.",
+        )
+
+    required_files = {
+        "KO matrix": kos_matrix_path,
+        "KPCT input": kpct_input_file,
+        "Module completeness matrix": module_matrix_file,
+    }
+    if contigs_file:
+        required_files["KPCT contigs output"] = contigs_file
+    if pathways_file:
+        required_files["KPCT pathways output"] = pathways_file
+
+    for label, path in required_files.items():
+        if not path.exists():
+            _record_validation_check(
+                report_data,
+                f"file_exists:{label}",
+                "fail",
+                f"Missing required file: {path}",
+            )
+        else:
+            _record_validation_check(
+                report_data,
+                f"file_exists:{label}",
+                "ok",
+                f"Found {path}",
+            )
+
+    if report_data["errors"]:
+        logger.error("Validation halted due to missing required files.")
+        if report:
+            with open(report, "w") as handle:
+                json.dump(report_data, handle, indent=2)
+        raise typer.Exit(1)
+
+    # Read KO matrix
+    ko_df, ko_delimiter = _read_ko_matrix_file(kos_matrix_path, logger)
+    if "taxon_oid" not in ko_df.columns:
+        _record_validation_check(
+            report_data,
+            "ko_matrix_format",
+            "fail",
+            "KO matrix missing required 'taxon_oid' column.",
+        )
+        logger.error("KO matrix validation failed: missing taxon_oid.")
+        if report:
+            with open(report, "w") as handle:
+                json.dump(report_data, handle, indent=2)
+        raise typer.Exit(1)
+
+    ko_columns = [col for col in ko_df.columns if col != "taxon_oid"]
+    if not ko_columns:
+        _record_validation_check(
+            report_data,
+            "ko_matrix_format",
+            "fail",
+            "KO matrix has no KO columns.",
+        )
+        logger.error("KO matrix validation failed: no KO columns.")
+        if report:
+            with open(report, "w") as handle:
+                json.dump(report_data, handle, indent=2)
+        raise typer.Exit(1)
+
+    ko_pattern = re.compile(r"^K\d{5}$")
+    invalid_kos = [col for col in ko_columns if not ko_pattern.match(col)]
+    if invalid_kos:
+        _record_validation_check(
+            report_data,
+            "ko_matrix_columns",
+            "warn",
+            f"Found {len(invalid_kos)} non-KO columns (expected KXXXXX). Example: {invalid_kos[:5]}",
+        )
+    else:
+        _record_validation_check(
+            report_data,
+            "ko_matrix_columns",
+            "ok",
+            f"Found {len(ko_columns)} KO columns.",
+        )
+
+    ko_df["taxon_oid"] = ko_df["taxon_oid"].astype(str)
+    genomes = ko_df["taxon_oid"].tolist()
+    report_data["stats"]["genomes"] = len(genomes)
+    report_data["stats"]["ko_columns"] = len(ko_columns)
+    if len(genomes) != len(set(genomes)):
+        _record_validation_check(
+            report_data,
+            "genome_ids_unique",
+            "warn",
+            "Duplicate genome identifiers found in KO matrix.",
+        )
+    else:
+        _record_validation_check(
+            report_data,
+            "genome_ids_unique",
+            "ok",
+            "Genome identifiers are unique in KO matrix.",
+        )
+
+    bad_names = [g for g in genomes if not g or g.strip() != g or re.search(r"\\s", g)]
+    if bad_names:
+        _record_validation_check(
+            report_data,
+            "genome_id_format",
+            "warn",
+            f"Found {len(bad_names)} genome identifiers with whitespace or empty values. Example: {bad_names[:3]}",
+        )
+    else:
+        _record_validation_check(
+            report_data,
+            "genome_id_format",
+            "ok",
+            "Genome identifiers contain no whitespace.",
+        )
+
+    ko_numeric = ko_df[ko_columns].apply(pd.to_numeric, errors="coerce")
+    if ko_numeric.isna().any().any():
+        _record_validation_check(
+            report_data,
+            "ko_matrix_numeric",
+            "warn",
+            "Non-numeric KO counts detected in KO matrix.",
+        )
+    else:
+        _record_validation_check(
+            report_data,
+            "ko_matrix_numeric",
+            "ok",
+            "KO matrix counts are numeric.",
+        )
+
+    ko_totals_series = ko_numeric.sum(axis=1)
+    ko_totals = {str(ko_df.at[idx, "taxon_oid"]): float(total) for idx, total in ko_totals_series.items()}
+    ko_present = {}
+    for idx, row in ko_numeric.iterrows():
+        genome_id = str(ko_df.at[idx, "taxon_oid"])
+        ko_present[genome_id] = {ko for ko in ko_columns if row[ko] > 0}
+
+    # KPCT input consistency
+    kpct_genomes_to_kos = _read_kpct_input_file(kpct_input_file)
+    missing_kpct = set(genomes) - set(kpct_genomes_to_kos.keys())
+    if missing_kpct:
+        _record_validation_check(
+            report_data,
+            "kpct_input_genomes",
+            "warn",
+            f"{len(missing_kpct)} genomes from KO matrix missing in KPCT input. Example: {list(missing_kpct)[:3]}",
+        )
+    else:
+        _record_validation_check(
+            report_data,
+            "kpct_input_genomes",
+            "ok",
+            "All KO-matrix genomes are present in KPCT input.",
+        )
+
+    ko_mismatch = []
+    for genome_id in genomes:
+        kpct_kos = kpct_genomes_to_kos.get(genome_id)
+        if kpct_kos is None:
+            continue
+        if ko_present[genome_id] != kpct_kos:
+            ko_mismatch.append(genome_id)
+    if ko_mismatch:
+        _record_validation_check(
+            report_data,
+            "kpct_input_kos",
+            "warn",
+            f"KO sets differ between KO matrix and KPCT input for {len(ko_mismatch)} genomes. Example: {ko_mismatch[:3]}",
+        )
+    else:
+        _record_validation_check(
+            report_data,
+            "kpct_input_kos",
+            "ok",
+            "KPCT input KO sets match KO matrix for all genomes.",
+        )
+
+    combo_ids = [gid for gid in kpct_genomes_to_kos.keys() if "__" in gid]
+    if combo_ids:
+        max_checks = 100
+        mismatch_count = 0
+        for combo_id in combo_ids[:max_checks]:
+            members = combo_id.split("__")
+            if any(member not in ko_present for member in members):
+                continue
+            union_kos = set()
+            for member in members:
+                union_kos.update(ko_present[member])
+            if union_kos != kpct_genomes_to_kos[combo_id]:
+                mismatch_count += 1
+        if mismatch_count:
+            _record_validation_check(
+                report_data,
+                "kpct_combo_kos",
+                "warn",
+                f"{mismatch_count} of {min(len(combo_ids), max_checks)} combination KO sets do not match union of members.",
+            )
+        else:
+            _record_validation_check(
+                report_data,
+                "kpct_combo_kos",
+                "ok",
+                "Combination KO sets match union of members (sampled).",
+            )
+
+    # KPCT contigs vs pathways outputs
+    if contigs_file and pathways_file:
+        match, detail = _compare_kpct_outputs(contigs_file, pathways_file)
+        _record_validation_check(
+            report_data,
+            "kpct_output_consistency",
+            "ok" if match else "warn",
+            detail,
+        )
+
+    # Module completeness checks
+    module_df = pd.read_csv(module_matrix_file, sep="\t")
+    if "n_members" not in module_df.columns or "taxon_oid" not in module_df.columns:
+        _record_validation_check(
+            report_data,
+            "module_completeness_format",
+            "fail",
+            "module_completeness.tsv missing n_members or taxon_oid.",
+        )
+        logger.error("module_completeness.tsv missing required columns. Validation aborted.")
+        if report:
+            with open(report, "w") as handle:
+                json.dump(report_data, handle, indent=2)
+        raise typer.Exit(1)
+    else:
+        _record_validation_check(
+            report_data,
+            "module_completeness_format",
+            "ok",
+            "module_completeness.tsv has required columns.",
+        )
+
+    module_df["taxon_oid"] = module_df["taxon_oid"].astype(str)
+    module_df["n_members"] = pd.to_numeric(module_df["n_members"], errors="coerce")
+    if module_df["n_members"].isna().any():
+        _record_validation_check(
+            report_data,
+            "module_completeness_n_members",
+            "warn",
+            "Non-numeric n_members values detected in module completeness matrix.",
+        )
+    module_df["n_members"] = module_df["n_members"].fillna(-1).astype(int)
+
+    module_cols = [col for col in module_df.columns if re.match(r"^M\d{5}$", col)]
+    if not module_cols:
+        _record_validation_check(
+            report_data,
+            "module_columns",
+            "fail",
+            "No KEGG module columns detected in module completeness matrix.",
+        )
+    else:
+        _record_validation_check(
+            report_data,
+            "module_columns",
+            "ok",
+            f"Detected {len(module_cols)} module columns.",
+        )
+    report_data["stats"]["modules"] = len(module_cols)
+
+    completeness_scale = 100.0
+    if module_cols:
+        module_values = module_df[module_cols].apply(pd.to_numeric, errors="coerce")
+        if module_values.isna().any().any():
+            _record_validation_check(
+                report_data,
+                "module_completeness_numeric",
+                "warn",
+                "Non-numeric completeness values found in module completeness matrix.",
+            )
+        min_val = float(module_values.min().min())
+        max_val = float(module_values.max().max())
+        report_data["stats"]["module_min"] = min_val
+        report_data["stats"]["module_max"] = max_val
+        if min_val < -1e-6 or max_val > 100.0 + 1e-6:
+            _record_validation_check(
+                report_data,
+                "module_completeness_range",
+                "fail",
+                f"Module completeness values out of expected range (min={min_val}, max={max_val}).",
+            )
+        else:
+            _record_validation_check(
+                report_data,
+                "module_completeness_range",
+                "ok",
+                f"Module completeness range OK (min={min_val}, max={max_val}).",
+            )
+        completeness_scale = 100.0 if max_val > 1.5 else 1.0
+        report_data["stats"]["completeness_scale"] = completeness_scale
+
+    # Validate n_members vs taxon_oid format
+    mismatch_members = 0
+    for _, row in module_df.iterrows():
+        taxon_id = str(row["taxon_oid"])
+        expected_members = taxon_id.count("__") + 1 if "__" in taxon_id else 1
+        if int(row["n_members"]) != expected_members:
+            mismatch_members += 1
+    if mismatch_members:
+        _record_validation_check(
+            report_data,
+            "n_members_consistency",
+            "warn",
+            f"{mismatch_members} rows have n_members inconsistent with taxon_oid combination size.",
+        )
+    else:
+        _record_validation_check(
+            report_data,
+            "n_members_consistency",
+            "ok",
+            "n_members values match taxon_oid combination sizes.",
+        )
+
+    # Compare contig ids and module ids if KPCT outputs available
+    if contigs_file:
+        contig_ids: Set[str] = set()
+        kpct_module_ids: Set[str] = set()
+        with contigs_file.open("r") as handle:
+            reader = csv.DictReader(handle, delimiter="\t")
+            for row in reader:
+                contig_value = row.get("contig") or row.get("Contig") or row.get("genome") or row.get("Genome") or row.get("taxon_oid")
+                if contig_value:
+                    contig_ids.add(str(contig_value))
+                module_value = (
+                    row.get("module_accession")
+                    or row.get("module_id")
+                    or row.get("Module")
+                )
+                if module_value:
+                    kpct_module_ids.add(str(module_value))
+        missing_contigs = set(module_df["taxon_oid"]) - contig_ids
+        if missing_contigs:
+            _record_validation_check(
+                report_data,
+                "kpct_contigs_coverage",
+                "warn",
+                f"{len(missing_contigs)} taxon_oids from module matrix missing in KPCT contigs output.",
+            )
+        else:
+            _record_validation_check(
+                report_data,
+                "kpct_contigs_coverage",
+                "ok",
+                "KPCT contigs output covers all taxon_oids in module matrix.",
+            )
+
+        missing_modules = set(module_cols) - kpct_module_ids
+        if missing_modules:
+            _record_validation_check(
+                report_data,
+                "kpct_module_coverage",
+                "warn",
+                f"{len(missing_modules)} module columns missing from KPCT contigs output.",
+            )
+        else:
+            _record_validation_check(
+                report_data,
+                "kpct_module_coverage",
+                "ok",
+                "KPCT contigs output covers all module columns.",
+            )
+
+    # Emapper checks (pipeline mode)
+    if mode == "pipeline" and emapper_file:
+        total_queries, bad_queries = _count_emapper_header_issues(emapper_file)
+        if bad_queries:
+            _record_validation_check(
+                report_data,
+                "emapper_header_format",
+                "warn",
+                f"{bad_queries} of {total_queries} emapper queries lack genome|protein format.",
+            )
+        else:
+            _record_validation_check(
+                report_data,
+                "emapper_header_format",
+                "ok",
+                "All emapper queries follow genome|protein format.",
+            )
+
+        genome_ko_proteins = parse_emapper_annotations(str(emapper_file), logger)
+        emapper_genomes = set(genome_ko_proteins.keys())
+        if set(genomes) - emapper_genomes:
+            _record_validation_check(
+                report_data,
+                "emapper_genome_coverage",
+                "warn",
+                "Some genomes in KO matrix are missing in emapper annotations.",
+            )
+        else:
+            _record_validation_check(
+                report_data,
+                "emapper_genome_coverage",
+                "ok",
+                "All KO-matrix genomes are present in emapper annotations.",
+            )
+
+        emapper_ko_set: Set[str] = set()
+        emapper_totals: Dict[str, int] = {}
+        for genome_id, ko_dict in genome_ko_proteins.items():
+            emapper_totals[genome_id] = sum(len(proteins) for proteins in ko_dict.values())
+            emapper_ko_set.update(ko_dict.keys())
+
+        if set(ko_columns) != emapper_ko_set:
+            _record_validation_check(
+                report_data,
+                "emapper_vs_matrix_kos",
+                "warn",
+                f"KO sets differ between emapper annotations and KO matrix (emapper={len(emapper_ko_set)}, matrix={len(ko_columns)}).",
+            )
+        else:
+            _record_validation_check(
+                report_data,
+                "emapper_vs_matrix_kos",
+                "ok",
+                "KO sets match between emapper annotations and KO matrix.",
+            )
+
+        mismatched_totals = []
+        for genome_id, total in emapper_totals.items():
+            if genome_id not in ko_totals:
+                continue
+            matrix_total = float(ko_totals[genome_id])
+            if abs(matrix_total - total) > 1e-6:
+                mismatched_totals.append(genome_id)
+        if mismatched_totals:
+            _record_validation_check(
+                report_data,
+                "emapper_vs_matrix_counts",
+                "fail",
+                f"KO counts differ between emapper and KO matrix for {len(mismatched_totals)} genomes. Example: {mismatched_totals[:3]}",
+            )
+        else:
+            _record_validation_check(
+                report_data,
+                "emapper_vs_matrix_counts",
+                "ok",
+                "KO counts match between emapper and KO matrix.",
+            )
+
+    # Complementarity checks
+    comp_pattern = re.compile(r"module_completeness_complementarity_(\\d+)member\\.tsv$")
+    comp_files: Dict[int, Path] = {}
+    for file_path in Path(savedir).glob("module_completeness_complementarity_*member.tsv"):
+        match = comp_pattern.match(file_path.name)
+        if match:
+            comp_files[int(match.group(1))] = file_path
+
+    if calculate_complementarity is None:
+        expected_sizes = sorted(comp_files.keys())
+    elif calculate_complementarity >= 2:
+        expected_sizes = list(range(2, calculate_complementarity + 1))
+    else:
+        expected_sizes = []
+
+    for n_members in expected_sizes:
+        if n_members not in comp_files:
+            _record_validation_check(
+                report_data,
+                f"complementarity_file_{n_members}",
+                "fail",
+                f"Expected complementarity report missing for {n_members}-member combinations.",
+            )
+        else:
+            _record_validation_check(
+                report_data,
+                f"complementarity_file_{n_members}",
+                "ok",
+                f"Found complementarity report for {n_members}-member combinations.",
+            )
+
+    # Prepare module lookup for complementarity validation
+    module_df_indexed = module_df.set_index(["n_members", "taxon_oid"])
+
+    for n_members, comp_path in comp_files.items():
+        comp_df = pd.read_csv(comp_path, sep="\t")
+        taxon_cols = [col for col in comp_df.columns if col.startswith("taxon_oid_")]
+        completeness_cols = [col for col in comp_df.columns if col.startswith("completeness_taxon_oid_")]
+
+        if not taxon_cols or "module_id" not in comp_df.columns:
+            _record_validation_check(
+                report_data,
+                f"complementarity_format_{n_members}",
+                "fail",
+                f"Complementarity report {comp_path.name} missing required columns.",
+            )
+            continue
+
+        taxon_cols = sorted(taxon_cols, key=lambda x: int(x.split("_")[-1]))
+        completeness_cols = sorted(completeness_cols, key=lambda x: int(x.split("_")[-1])) if completeness_cols else []
+
+        missing_rows = 0
+        bad_combo = 0
+        bad_individual = 0
+        mismatch_reported = 0
+        missing_proteins = 0
+        non_placeholder = 0
+        protein_cols = [col for col in comp_df.columns if col.startswith("proteins_taxon_oid_")]
+
+        for _, row in comp_df.iterrows():
+            taxon_ids = [str(row[col]) for col in taxon_cols]
+            module_id = str(row["module_id"])
+            combo_id = "__".join(taxon_ids)
+            combo_key = (n_members, combo_id)
+            if combo_key not in module_df_indexed.index:
+                combo_id_sorted = "__".join(sorted(taxon_ids))
+                combo_key = (n_members, combo_id_sorted)
+            if combo_key not in module_df_indexed.index:
+                missing_rows += 1
+                continue
+
+            if module_id not in module_df.columns:
+                missing_rows += 1
+                continue
+            combo_val = module_df_indexed.loc[combo_key, module_id]
+            if isinstance(combo_val, pd.Series):
+                combo_val = combo_val.iloc[0]
+            combo_val = float(combo_val)
+            if abs(combo_val - completeness_scale) > 1e-6:
+                bad_combo += 1
+
+            for idx, taxon_id in enumerate(taxon_ids):
+                try:
+                    individual_val = module_df_indexed.loc[(1, taxon_id), module_id]
+                    if isinstance(individual_val, pd.Series):
+                        individual_val = individual_val.iloc[0]
+                    individual_val = float(individual_val)
+                except KeyError:
+                    missing_rows += 1
+                    continue
+                if individual_val >= completeness_scale - 1e-6:
+                    bad_individual += 1
+                if completeness_cols:
+                    reported_val = float(row[completeness_cols[idx]])
+                    if abs(reported_val - individual_val) > 1e-6:
+                        mismatch_reported += 1
+
+            if protein_cols:
+                values = [str(row[col]) for col in protein_cols]
+                if mode == "pipeline" and emapper_file:
+                    if any(val.startswith("No protein data available") for val in values):
+                        missing_proteins += 1
+                elif mode == "ko-matrix":
+                    if any(not val.startswith("No protein data available") for val in values):
+                        non_placeholder += 1
+
+        if missing_rows:
+            _record_validation_check(
+                report_data,
+                f"complementarity_lookup_{n_members}",
+                "warn",
+                f"{missing_rows} complementarity rows could not be matched to module completeness matrix.",
+            )
+        if bad_combo:
+            _record_validation_check(
+                report_data,
+                f"complementarity_combo_{n_members}",
+                "warn",
+                f"{bad_combo} rows have combination completeness != {completeness_scale}.",
+            )
+        if bad_individual:
+            _record_validation_check(
+                report_data,
+                f"complementarity_individual_{n_members}",
+                "warn",
+                f"{bad_individual} rows have individuals already complete.",
+            )
+        if mismatch_reported:
+            _record_validation_check(
+                report_data,
+                f"complementarity_reported_{n_members}",
+                "warn",
+                f"{mismatch_reported} rows have completeness values inconsistent with module matrix.",
+            )
+        if missing_proteins:
+            _record_validation_check(
+                report_data,
+                f"complementarity_proteins_{n_members}",
+                "warn",
+                f"{missing_proteins} rows missing protein provenance in pipeline mode.",
+            )
+        if non_placeholder:
+            _record_validation_check(
+                report_data,
+                f"complementarity_placeholder_{n_members}",
+                "warn",
+                f"{non_placeholder} rows contain protein provenance in KO-matrix mode.",
+            )
+
+    summary = (
+        f"Validation summary: {len(report_data['errors'])} errors, "
+        f"{len(report_data['warnings'])} warnings."
+    )
+    if report_data["errors"]:
+        logger.error(summary)
+    elif report_data["warnings"]:
+        logger.warning(summary)
+    else:
+        logger.info(summary)
+
+    if report:
+        report_path = Path(report)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        with report_path.open("w") as handle:
+            json.dump(report_data, handle, indent=2)
+        logger.info("Validation report written to %s", report_path)
+
+    if report_data["errors"] or (strict and report_data["warnings"]):
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@
 - Tracks and reports the actual proteins that are responsible for the completion of the module in the combination of N genomes.
 - **Automatic resource monitoring** with timestamped logs tracking CPU usage, memory consumption, and runtime for reproducibility.
 - **Consistent logging to stdout/stderr** with a per-command resource summary emitted at the end of each run.
+- **Built-in validation (`moducomp validate`)** for scientific consistency checks across annotations, KO matrices, KPCT outputs, and complementarity reports.
 
 ## Installation (Recommended)
 
@@ -123,6 +124,9 @@ This section lists all CLI options implemented today, along with their default v
 | `--del-tmp/--keep-tmp` | `true` | Delete temporary files after completion. |
 | `--lowmem/--fullmem` (`--low-mem/--full-mem`) | `fullmem` | Run eggNOG-mapper without `--dbmem` to reduce RAM. |
 | `--verbose/--quiet` | `false` | Enable verbose progress output. |
+| `--validate/--no-validate` | `validate` | Run post-run validation checks. |
+| `--validate-report/--no-validate-report` | `validate-report` | Write `validation_report.json` in the output directory. |
+| `--validate-strict/--validate-lenient` | `lenient` | Treat validation warnings as failures when strict. |
 | `--log-level`, `-l` | `INFO` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
 | `--eggnog-data-dir` | `EGGNOG_DATA_DIR` | Path to eggNOG-mapper data (sets `EGGNOG_DATA_DIR`). |
 
@@ -137,6 +141,9 @@ This section lists all CLI options implemented today, along with their default v
 | `--del-tmp/--keep-tmp` | `true` | Delete temporary files after the test completes. |
 | `--lowmem/--fullmem` (`--low-mem/--full-mem`) | `lowmem` | Low-memory mode is the default for tests. |
 | `--verbose/--quiet` | `verbose` | Verbose output is the default for tests. |
+| `--validate/--no-validate` | `validate` | Run post-run validation checks. |
+| `--validate-report/--no-validate-report` | `validate-report` | Write `validation_report.json` in the output directory. |
+| `--validate-strict/--validate-lenient` | `lenient` | Treat validation warnings as failures when strict. |
 | `--log-level`, `-l` | `INFO` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
 | `--eggnog-data-dir` | `EGGNOG_DATA_DIR` | Path to eggNOG-mapper data (sets `EGGNOG_DATA_DIR`). |
 
@@ -148,6 +155,21 @@ This section lists all CLI options implemented today, along with their default v
 | `--kpct-outprefix` | `output_give_completeness` | Prefix for KPCT output files. |
 | `--del-tmp/--keep-tmp` | `true` | Delete temporary files after completion. |
 | `--ncpus`, `-n` | `16` | CPU cores for KPCT parallel processing. |
+| `--verbose/--quiet` | `false` | Enable verbose progress output. |
+| `--validate/--no-validate` | `validate` | Run post-run validation checks. |
+| `--validate-report/--no-validate-report` | `validate-report` | Write `validation_report.json` in the output directory. |
+| `--validate-strict/--validate-lenient` | `lenient` | Treat validation warnings as failures when strict. |
+| `--log-level`, `-l` | `INFO` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
+
+#### `validate` command (positional args: `savedir`)
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--mode` | `auto` | Validation mode: `auto`, `pipeline`, or `ko-matrix`. |
+| `--calculate-complementarity`, `-c` | `auto-detect` | Expected complementarity size (0 disables). |
+| `--kpct-outprefix` | `output_give_completeness` | KPCT output prefix used during analysis. |
+| `--strict/--lenient` | `lenient` | Treat warnings as failures when strict. |
+| `--report` | _none_ | Write JSON validation report to this path. |
 | `--verbose/--quiet` | `false` | Enable verbose progress output. |
 | `--log-level`, `-l` | `INFO` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
 
@@ -172,6 +194,33 @@ This section lists all CLI options implemented today, along with their default v
 - The `--ncpus` parameter controls the number of CPU cores used for both eggNOG-mapper annotation and KPCT analysis
 - For KPCT parallel processing, the system creates the same number of chunks as CPU cores specified
 - Example: `--ncpus 8` will use 8 cores and create 8 chunks for optimal parallel processing
+
+### Validation (QC)
+
+Use the built-in validator to check scientific consistency across outputs after a run. The validator compares:
+- KO sets and counts between eggNOG-mapper annotations and `kos_matrix.csv`
+- KO sets between `kos_matrix.csv` and `ko_file_for_kpct.txt`
+- KPCT contigs vs pathways outputs
+- Module completeness ranges and combination naming
+- Complementarity reports versus module completeness values
+- Protein provenance fields (pipeline mode) or placeholders (KO-matrix mode)
+
+Example:
+
+```bash
+# Validation runs by default after pipeline/analyze/test.
+# Use --no-validate to disable or --no-validate-report to skip JSON output.
+# When validation reports errors (or warnings in strict mode), the command exits non-zero.
+
+# Validate a pipeline run and write a JSON report
+moducomp validate /path/to/output --mode pipeline --report /path/to/output/validation_report.json
+
+# Validate KO-matrix mode outputs (non-default KPCT prefix)
+moducomp validate /path/to/output --mode ko-matrix --kpct-outprefix my_prefix
+
+# Treat warnings as failures
+moducomp validate /path/to/output --strict
+```
 
 ### ⚠️ Important note 1
 
@@ -293,6 +342,7 @@ Genome identifiers are stored as `taxon_oid`. In pipeline mode, ModuComp expects
 - `logs/moducomp.log`: Detailed run log with structured progress messages and per-command resource summaries.
 - `logs/resource_usage_YYYYMMDD_HHMMSS.log`: Resource monitoring log capturing wall time, CPU time, CPU utilization, peak RAM, and exit code for each monitored command.
 - `tmp/` (only if `--keep-tmp`): Intermediate files such as `merged_genomes.faa`, `emapper_output/`, and KPCT chunk outputs.
+- `validation_report.json` (default when validation is enabled): JSON report produced by the validator.
 
 **KO-matrix mode outputs (`moducomp analyze-ko-matrix`)**
 
@@ -303,6 +353,7 @@ Genome identifiers are stored as `taxon_oid`. In pipeline mode, ModuComp expects
 - `module_completeness.tsv`: Module completeness matrix (same format as pipeline mode).
 - `module_completeness_complementarity_Nmember.tsv`: Complementarity report. Protein contribution columns are filled with `No protein data available for <genome>` because no eggNOG-mapper annotations are available in KO-matrix mode.
 - `logs/moducomp.log` and `logs/resource_usage_YYYYMMDD_HHMMSS.log`: Standard run logs and resource summaries.
+- `validation_report.json` (default when validation is enabled): JSON report produced by the validator.
 
 ## Citation
 Villada, JC. & Schulz, F. (2025). Assessment of metabolic module completeness of genomes and metabolic complementarity in microbiomes with `moducomp` . `moducomp` (v0.5.1) Zenodo. https://doi.org/10.5281/zenodo.16116092
