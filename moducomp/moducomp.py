@@ -147,41 +147,48 @@ def require_eggnog_data_dir(eggnog_data_dir: Optional[str], logger: Optional[log
 
     env_value = os.environ.get("EGGNOG_DATA_DIR", "").strip()
     if not env_value:
-        default_dir = default_eggnog_data_dir()
-        if default_dir.exists() and default_dir.is_dir() and any(default_dir.iterdir()):
-            os.environ["EGGNOG_DATA_DIR"] = str(default_dir)
-            env_value = str(default_dir)
+        configured = _get_configured_eggnog_dir(logger)
+        if configured:
+            os.environ["EGGNOG_DATA_DIR"] = str(configured)
+            env_value = str(configured)
             if logger:
-                logger.info("EGGNOG_DATA_DIR not set; using default %s", env_value)
+                logger.info("EGGNOG_DATA_DIR not set; using configured %s", env_value)
         else:
-            message = (
-                "EGGNOG_DATA_DIR is required to run eggNOG-mapper. "
-                "Set the EGGNOG_DATA_DIR environment variable or pass --eggnog-data-dir. "
-                f"Default location is {default_dir}. "
-                "Download the data with: download_eggnog_data.py or moducomp download-eggnog-data"
-            )
-            emit_error(message, logger)
-            raise typer.Exit(1)
+            default_dir = default_eggnog_data_dir()
+            if default_dir.exists() and default_dir.is_dir() and _has_eggnog_core_files(default_dir):
+                os.environ["EGGNOG_DATA_DIR"] = str(default_dir)
+                env_value = str(default_dir)
+                if logger:
+                    logger.info("EGGNOG_DATA_DIR not set; using default %s", env_value)
+            else:
+                message = (
+                    "EGGNOG_DATA_DIR is required to run eggNOG-mapper. "
+                    "Run `moducomp setup` or pass --eggnog-data-dir. "
+                    f"Default location is {default_dir}."
+                )
+                emit_error(message, logger)
+                raise typer.Exit(1)
 
     data_dir = Path(env_value).expanduser().resolve()
     if not data_dir.exists() or not data_dir.is_dir():
         message = (
             f"EGGNOG_DATA_DIR is not a valid directory: {data_dir}. "
-            "Download the data with: download_eggnog_data.py or moducomp download-eggnog-data"
+            "Run `moducomp setup` to download the data."
         )
         emit_error(message, logger)
         raise typer.Exit(1)
 
-    if not any(data_dir.iterdir()):
+    if not _has_eggnog_core_files(data_dir):
         message = (
-            f"EGGNOG_DATA_DIR exists but appears empty: {data_dir}. "
-            "Download the data with: download_eggnog_data.py or moducomp download-eggnog-data"
+            f"EGGNOG_DATA_DIR is missing required eggNOG files: {data_dir}. "
+            "Run `moducomp setup` to download the data."
         )
         emit_error(message, logger)
         raise typer.Exit(1)
 
     if logger:
         logger.info("Using EGGNOG_DATA_DIR: %s", data_dir)
+    _set_configured_eggnog_dir(data_dir, logger)
     return data_dir
 def conditional_output(message: str, color: str = "white", verbose: bool = True) -> None:
     """
@@ -345,6 +352,84 @@ def default_eggnog_data_dir() -> Path:
     xdg_home = os.environ.get("XDG_DATA_HOME")
     base = Path(xdg_home).expanduser() if xdg_home else Path.home() / ".local" / "share"
     return base / "moducomp" / "eggnog"
+
+
+def _config_dir() -> Path:
+    xdg_home = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(xdg_home).expanduser() if xdg_home else Path.home() / ".config"
+    return base / "moducomp"
+
+
+def _config_path() -> Path:
+    return _config_dir() / "config.json"
+
+
+def _load_config(logger: Optional[logging.Logger] = None) -> Dict[str, Any]:
+    path = _config_path()
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        if isinstance(data, dict):
+            return data
+    except Exception as exc:
+        if logger:
+            logger.warning("Failed to read config %s: %s", path, exc)
+    return {}
+
+
+def _save_config(data: Dict[str, Any], logger: Optional[logging.Logger] = None) -> None:
+    path = _config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open("w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2, sort_keys=True)
+    except Exception as exc:
+        if logger:
+            logger.warning("Failed to write config %s: %s", path, exc)
+
+
+def _has_eggnog_core_files(data_dir: Path) -> bool:
+    required = ("eggnog.db", "eggnog.taxa.db", "eggnog_proteins.dmnd")
+    return all((data_dir / name).exists() for name in required)
+
+
+def _get_configured_eggnog_dir(logger: Optional[logging.Logger] = None) -> Optional[Path]:
+    data = _load_config(logger)
+    value = data.get("eggnog_data_dir")
+    if not value:
+        return None
+    path = Path(value).expanduser().resolve()
+    if not path.exists() or not path.is_dir():
+        if logger:
+            logger.warning("Configured eggNOG data dir is invalid: %s", path)
+        return None
+    if not _has_eggnog_core_files(path):
+        if logger:
+            logger.warning("Configured eggNOG data dir is missing required files: %s", path)
+        return None
+    return path
+
+
+def _set_configured_eggnog_dir(path: Path, logger: Optional[logging.Logger] = None) -> None:
+    data = _load_config(logger)
+    data["eggnog_data_dir"] = str(path)
+    _save_config(data, logger)
+
+
+def _find_eggnog_downloader() -> Optional[str]:
+    for name in ("download_eggnog_data.py", "download_eggnog_data"):
+        path = shutil.which(name)
+        if path:
+            try:
+                wrapper_text = Path(path).read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                wrapper_text = ""
+            if "moducomp.moducomp" in wrapper_text:
+                continue
+            return path
+    return None
 
 def run_subprocess_with_logging(
     cmd: List[str],
@@ -3732,11 +3817,23 @@ def test(
 
 
 @app.command()
-def download_eggnog_data(
+def setup(
     eggnog_data_dir: Optional[str] = typer.Option(
         None,
         "--eggnog-data-dir",
-        help="Destination directory for eggNOG-mapper data (sets EGGNOG_DATA_DIR).",
+        help="Destination directory for eggNOG-mapper data (sets EGGNOG_DATA_DIR). Can point to an existing download.",
+    ),
+    yes: bool = typer.Option(
+        True,
+        "--yes/--prompt",
+        "-y",
+        help="Automatically accept core database downloads (use --prompt to confirm each).",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Re-download data even if files already exist.",
     ),
     log_level: str = typer.Option(
         "INFO",
@@ -3750,166 +3847,56 @@ def download_eggnog_data(
         help="Stream downloader output to the console.",
     ),
 ) -> None:
-    """Download eggNOG-mapper data using the bundled downloader."""
-    if eggnog_data_dir:
-        os.environ["EGGNOG_DATA_DIR"] = eggnog_data_dir
+    """Download eggNOG-mapper data (via download_eggnog_data.py) and persist the location for future runs."""
+    target_dir = Path(eggnog_data_dir).expanduser().resolve() if eggnog_data_dir else default_eggnog_data_dir()
+    target_dir = target_dir.expanduser().resolve()
 
     log_dir = Path.cwd() / "logs"
     logger = configure_logging(log_level, log_dir)
-    logger.info("Starting eggNOG data download.")
+    logger.info("Starting moducomp setup.")
     logger.info("CLI command: %s", " ".join(shlex.quote(arg) for arg in sys.argv))
 
-    env_value = os.environ.get("EGGNOG_DATA_DIR", "").strip()
-    if not env_value:
-        default_dir = default_eggnog_data_dir()
-        os.environ["EGGNOG_DATA_DIR"] = str(default_dir)
-        env_value = str(default_dir)
-        logger.info("EGGNOG_DATA_DIR not set; using default %s", env_value)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    os.environ["EGGNOG_DATA_DIR"] = str(target_dir)
+    logger.info("Using EGGNOG_DATA_DIR: %s", target_dir)
 
-    data_dir = Path(env_value).expanduser().resolve()
-    data_dir.mkdir(parents=True, exist_ok=True)
-    logger.info("Downloading eggNOG data into %s", data_dir)
+    if _has_eggnog_core_files(target_dir) and not force:
+        logger.info("eggNOG data already present; skipping download.")
+    else:
+        downloader = _find_eggnog_downloader()
+        if downloader is None:
+            message = (
+                "download_eggnog_data.py not found in PATH. "
+                "Ensure eggnog-mapper is installed."
+            )
+            emit_error(message, logger)
+            raise typer.Exit(1)
 
-    downloader = None
-    for path_entry in os.environ.get("PATH", "").split(os.pathsep):
-        candidate = Path(path_entry) / "download_eggnog_data.py"
-        if not candidate.is_file() or not os.access(candidate, os.X_OK):
-            continue
+        cmd = [downloader, "--data_dir", str(target_dir)]
+        if yes:
+            cmd.append("-y")
+        if force:
+            cmd.append("-f")
+        if not verbose:
+            cmd.append("-q")
+
+        logger.info("Running eggNOG-mapper downloader: %s", " ".join(shlex.quote(arg) for arg in cmd))
         try:
-            wrapper_text = candidate.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
-            wrapper_text = ""
-        if "moducomp.moducomp" in wrapper_text and "download_eggnog_data_cli" in wrapper_text:
-            continue
-        downloader = str(candidate)
-        break
-    if downloader is None:
-        message = (
-            "download_eggnog_data.py not found in PATH. "
-            "Ensure eggnog-mapper is installed."
+            subprocess.run(cmd, check=True)
+        except subprocess.CalledProcessError as exc:
+            emit_error(f"eggNOG-mapper downloader failed with exit code {exc.returncode}", logger)
+            raise typer.Exit(exc.returncode)
+
+    if not _has_eggnog_core_files(target_dir):
+        emit_error(
+            f"eggNOG data download incomplete in {target_dir}. "
+            "Re-run `moducomp setup` and ensure the core databases are downloaded.",
+            logger,
         )
-        emit_error(message, logger)
         raise typer.Exit(1)
 
-    # Run the downloader with progress updates based on data directory growth.
-    cmd = [downloader]
-    logger.info("Downloading eggNOG data: %s", downloader)
-
-    start_time = time.time()
-    last_progress_time = start_time
-    last_size = get_dir_size(data_dir)
-    last_files = count_files(data_dir)
-    progress_interval = 60
-
-    process = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        bufsize=1,
-        universal_newlines=True,
-    )
-
-    stdout_queue: "queue.Queue[Tuple[str, str]]" = queue.Queue()
-    stderr_queue: "queue.Queue[Tuple[str, str]]" = queue.Queue()
-
-    def stream_reader(stream, q, stream_type):
-        try:
-            for line in iter(stream.readline, ""):
-                q.put((stream_type, line.rstrip("\n\r")))
-        finally:
-            try:
-                stream.close()
-            except Exception:
-                pass
-
-    stdout_thread = threading.Thread(
-        target=stream_reader,
-        args=(process.stdout, stdout_queue, "stdout"),
-        daemon=True,
-    )
-    stderr_thread = threading.Thread(
-        target=stream_reader,
-        args=(process.stderr, stderr_queue, "stderr"),
-        daemon=True,
-    )
-    stdout_thread.start()
-    stderr_thread.start()
-
-    output_level = logging.INFO if verbose else logging.DEBUG
-    error_level = logging.WARNING if verbose else logging.DEBUG
-
-    while process.poll() is None or not stdout_queue.empty() or not stderr_queue.empty():
-        now = time.time()
-
-        # Drain stdout
-        try:
-            while True:
-                stream_type, line = stdout_queue.get_nowait()
-                if line:
-                    if logger:
-                        _log_lines(logger, line, output_level)
-        except queue.Empty:
-            pass
-
-        # Drain stderr
-        try:
-            while True:
-                stream_type, line = stderr_queue.get_nowait()
-                if line:
-                    if logger:
-                        _log_lines(logger, line, error_level)
-        except queue.Empty:
-            pass
-
-        if now - last_progress_time >= progress_interval:
-            try:
-                current_size = get_dir_size(data_dir)
-                current_files = count_files(data_dir)
-                delta = current_size - last_size
-                elapsed = now - last_progress_time
-                speed = delta / elapsed if elapsed > 0 else 0.0
-                file_delta = current_files - last_files
-                msg = (
-                    f"Download progress: {format_bytes(current_size)} total "
-                    f"(+{format_bytes(delta)} in {int(elapsed)}s, "
-                    f"{format_bytes(speed)}/s, +{file_delta} files)"
-                )
-                logger.info(msg)
-                last_size = current_size
-                last_files = current_files
-                last_progress_time = now
-            except Exception as exc:
-                logger.warning("Progress check failed: %s", exc)
-                last_progress_time = now
-
-        time.sleep(0.2)
-
-    stdout_thread.join(timeout=1.0)
-    stderr_thread.join(timeout=1.0)
-
-    returncode = process.returncode
-    total_size = get_dir_size(data_dir)
-    total_files = count_files(data_dir)
-    total_elapsed = time.time() - start_time
-    summary = (
-        f"Download finished: {format_bytes(total_size)} in {int(total_elapsed)}s "
-        f"across {total_files} files"
-    )
-    logger.info(summary)
-
-    if returncode != 0:
-        raise typer.Exit(returncode)
-
-
-def download_eggnog_data_cli() -> None:
-    """Entry point for download-eggnog-data/download_eggnog_data.py scripts."""
-    prog = Path(sys.argv[0]).name if sys.argv else "download-eggnog-data"
-    app(
-        prog_name=prog,
-        args=["download-eggnog-data", *sys.argv[1:]],
-    )
-
+    _set_configured_eggnog_dir(target_dir, logger)
+    logger.info("Saved eggNOG data location for future runs: %s", target_dir)
 
 
 @app.command()

@@ -28,8 +28,6 @@ dynamic = ["version", "description"]
 
 [project.scripts]
 moducomp = "moducomp.moducomp:app"
-download-eggnog-data = "moducomp.moducomp:download_eggnog_data_cli"
-"download_eggnog_data.py" = "moducomp.moducomp:download_eggnog_data_cli"
 
 [project.urls]
 Homepage = "https://github.com/NeLLi-team/moducomp"
@@ -55,9 +53,6 @@ kegg-pathways-completeness = "*"
 [tool.pixi.tasks]
 moducomp = "python -m moducomp --help"
 test = "python -m moducomp test --ncpus 2 --calculate-complementarity 2"
-download-eggnog-data = "python -m moducomp download-eggnog-data"
+setup = "python -m moducomp setup"
 pipeline = "python -m moducomp pipeline --help"
 analyze_ko_matrix = "python -m moducomp analyze-ko-matrix --help"
-
-[tool.flit.sdist]
-include = ["scripts/download_eggnog_data.py"]

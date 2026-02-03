@@ -35,29 +35,28 @@ pixi global install \
 
 ## Setup data (required)
 
-`moducomp` needs the eggNOG-mapper database to run. The primary (recommended) way to download it is using the `download_eggnog_data.py` wrapper, which mirrors the upstream downloader behavior. For upstream details, see the eggNOG-mapper setup guide: [eggNOG-mapper database setup](https://github.com/eggnogdb/eggnog-mapper/wiki/eggNOG-mapper-v2.1.5-to-v2.1.13#user-content-Setup).
+`moducomp` needs the eggNOG-mapper database to run. Use `moducomp setup` to download the data with eggNOG-mapper's official downloader and record the location for future runs. For upstream details, see the eggNOG-mapper setup guide: [eggNOG-mapper database setup](https://github.com/eggnogdb/eggnog-mapper/wiki/eggNOG-mapper-v2.1.5-to-v2.1.13#user-content-Setup).
 
 ```bash
-download_eggnog_data.py
+moducomp setup
 ```
 
-By default, the data are stored in `${XDG_DATA_HOME:-~/.local/share}/moducomp/eggnog`, and `moducomp` will auto-detect that location without needing `EGGNOG_DATA_DIR`.
+By default, the data are stored in `${XDG_DATA_HOME:-~/.local/share}/moducomp/eggnog`, and `moducomp` will auto-detect that location on future runs without needing `EGGNOG_DATA_DIR`.
 
-To use a custom location:
+To use a custom location (or point to an existing download):
 
 ```bash
-export EGGNOG_DATA_DIR="/path/to/eggnog-data"
-download_eggnog_data.py --eggnog-data-dir "$EGGNOG_DATA_DIR"
-# equivalent:
-# moducomp download-eggnog-data --eggnog-data-dir "$EGGNOG_DATA_DIR"
+moducomp setup --eggnog-data-dir /path/to/eggnog-data
 ```
+
+Add `--force` to re-download the data if the directory already exists. Use `--prompt` if you want to confirm each download interactively.
 
 ### Quick test
 
 Small test data sets ship with `moducomp`. After installation you can confirm the pipeline by running:
 
 ```bash
-moducomp test --ncpus 16 --calculate-complementarity 2 --eggnog-data-dir "$EGGNOG_DATA_DIR"
+moducomp test --ncpus 16 --calculate-complementarity 2
 ```
 
 The test command runs in low-memory mode by default. If you have plenty of RAM and want full-memory mode, add `--fullmem` (or `--full-mem`).
@@ -179,11 +178,13 @@ This section lists all CLI options implemented today, along with their default v
 | `--verbose/--quiet` | `false` | Enable verbose progress output. |
 | `--log-level`, `-l` | `INFO` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
 
-#### `download-eggnog-data` command
+#### `setup` command
 
 | Option | Default | Description |
 | --- | --- | --- |
 | `--eggnog-data-dir` | `${XDG_DATA_HOME:-~/.local/share}/moducomp/eggnog` | Destination for eggNOG-mapper data (sets `EGGNOG_DATA_DIR`). |
+| `--yes/--prompt`, `-y` | `yes` | Automatically accept core database downloads (use `--prompt` to confirm each). |
+| `--force`, `-f` | `false` | Re-download data even if files already exist. |
 | `--log-level`, `-l` | `INFO` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
 | `--verbose/--quiet` | `verbose` | Stream downloader output to the console. |
 
@@ -241,19 +242,12 @@ moducomp validate /path/to/output --strict
 You can override the bundled data location with `MODUCOMP_DATA_DIR`.
 When working from source, the bundled test genomes live at `moducomp/data/test_genomes`.
 
-`download_eggnog_data.py` is exposed by `moducomp` as a convenience wrapper for the eggnog-mapper downloader and is available in the Pixi environment (including `pixi global` installs).
+Use `moducomp setup` to download and register the eggNOG data directory. The location is stored in `${XDG_CONFIG_HOME:-~/.config}/moducomp/config.json` so future runs can find the data automatically.
 
-Pixi task (supports passing a custom location):
-
-```bash
-export EGGNOG_DATA_DIR=/path/to/eggnog-data
-pixi run download-eggnog-data --eggnog-data-dir /path/to/eggnog-data
-```
-
-Global install shortcut (also supports `--eggnog-data-dir`):
+From source (Pixi):
 
 ```bash
-download-eggnog-data --eggnog-data-dir /path/to/eggnog-data
+pixi run python -m moducomp setup --eggnog-data-dir /path/to/eggnog-data
 ```
 
 ### Running with your samples
