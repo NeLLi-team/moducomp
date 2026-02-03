@@ -429,6 +429,8 @@ def _find_eggnog_downloader() -> Optional[str]:
         [
             Path(sys.prefix) / "bin",
             Path(sys.exec_prefix) / "bin",
+            Path(sys.prefix) / "python-scripts",
+            Path(sys.exec_prefix) / "python-scripts",
         ]
     )
     for path_entry in os.environ.get("PATH", "").split(os.pathsep):
@@ -3888,7 +3890,7 @@ def setup(
         downloader = _find_eggnog_downloader()
         if downloader is None:
             message = (
-                "download_eggnog_data.py not found in PATH. "
+                "download_eggnog_data.py not found in PATH or the env's python-scripts directory. "
                 "Ensure eggnog-mapper is installed."
             )
             emit_error(message, logger)
