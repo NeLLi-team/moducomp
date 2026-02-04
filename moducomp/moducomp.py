@@ -455,6 +455,40 @@ def _find_eggnog_downloader() -> Optional[str]:
             return str(candidate)
     return None
 
+
+def _patch_eggnog_downloader(
+    downloader: str,
+    log_dir: Union[str, Path],
+    logger: Optional[logging.Logger] = None,
+) -> str:
+    """Patch eggNOG-mapper downloader URLs if they point to the deprecated host."""
+    old_base = "http://eggnogdb.embl.de/download/emapperdb-"
+    new_base = "https://eggnog5.embl.de/download/emapperdb-"
+
+    path = Path(downloader)
+    try:
+        contents = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return downloader
+
+    if old_base not in contents:
+        return downloader
+
+    patched = contents.replace(old_base, new_base)
+    patch_dir = Path(log_dir).expanduser().resolve()
+    patch_dir.mkdir(parents=True, exist_ok=True)
+    patched_path = patch_dir / "download_eggnog_data_patched.py"
+    try:
+        patched_path.write_text(patched, encoding="utf-8")
+    except OSError:
+        if logger:
+            logger.warning("Failed to write patched eggNOG downloader; using original.")
+        return downloader
+
+    if logger:
+        logger.info("Patched eggNOG downloader to use eggnog5.embl.de.")
+    return str(patched_path)
+
 def run_subprocess_with_logging(
     cmd: List[str],
     logger: Optional[logging.Logger] = None,
@@ -3895,6 +3929,7 @@ def setup(
             )
             emit_error(message, logger)
             raise typer.Exit(1)
+        downloader = _patch_eggnog_downloader(downloader, log_dir, logger)
 
         cmd = [sys.executable, downloader, "--data_dir", str(target_dir)]
         if yes:

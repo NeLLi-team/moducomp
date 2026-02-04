@@ -51,7 +51,7 @@ eggnog-mapper = ">=2.1.9,<2.2.0"
 kegg-pathways-completeness = "*"
 
 [tool.pixi.tasks]
-moducomp = "python -m moducomp --help"
+moducomp = "python -m moducomp"
 test = "python -m moducomp test --ncpus 2 --calculate-complementarity 2"
 setup = "python -m moducomp setup"
 pipeline = "python -m moducomp pipeline --help"
