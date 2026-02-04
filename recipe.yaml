@@ -7,7 +7,7 @@ package:
 
 source:
 - url: https://pypi.org/packages/source/m/moducomp/moducomp-${{ version }}.tar.gz
-  sha256: b160286cbd1193fc521bb5bf7bc295d68c9e9df29dd3918cf2154dd4b87710c6
+  sha256: aa069de7ec6d055ea6f1fa1cfc0a59357d08a014da2b7687236d48d69dec5de0
 
 build:
   script:
