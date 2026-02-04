@@ -418,76 +418,208 @@ def _set_configured_eggnog_dir(path: Path, logger: Optional[logging.Logger] = No
     _save_config(data, logger)
 
 
-def _find_eggnog_downloader() -> Optional[str]:
-    names = ("download_eggnog_data.py", "download_eggnog_data")
-    candidate_dirs = []
+def _get_eggnog_db_version(logger: Optional[logging.Logger] = None) -> str:
     try:
-        candidate_dirs.append(Path(sys.executable).resolve().parent)
-    except Exception:
-        pass
-    candidate_dirs.extend(
-        [
-            Path(sys.prefix) / "bin",
-            Path(sys.exec_prefix) / "bin",
-            Path(sys.prefix) / "python-scripts",
-            Path(sys.exec_prefix) / "python-scripts",
-        ]
-    )
-    for path_entry in os.environ.get("PATH", "").split(os.pathsep):
-        if path_entry:
-            candidate_dirs.append(Path(path_entry))
-
-    seen = set()
-    for directory in candidate_dirs:
-        if not directory or str(directory) in seen:
-            continue
-        seen.add(str(directory))
-        for name in names:
-            candidate = directory / name
-            if not candidate.is_file():
-                continue
-            try:
-                wrapper_text = candidate.read_text(encoding="utf-8", errors="ignore")
-            except OSError:
-                wrapper_text = ""
-            if "moducomp.moducomp" in wrapper_text:
-                continue
-            return str(candidate)
-    return None
-
-
-def _patch_eggnog_downloader(
-    downloader: str,
-    log_dir: Union[str, Path],
-    logger: Optional[logging.Logger] = None,
-) -> str:
-    """Patch eggNOG-mapper downloader URLs if they point to the deprecated host."""
-    old_base = "http://eggnogdb.embl.de/download/emapperdb-"
-    new_base = "https://eggnog5.embl.de/download/emapperdb-"
-
-    path = Path(downloader)
-    try:
-        contents = path.read_text(encoding="utf-8", errors="ignore")
-    except OSError:
-        return downloader
-
-    if old_base not in contents:
-        return downloader
-
-    patched = contents.replace(old_base, new_base)
-    patch_dir = Path(log_dir).expanduser().resolve()
-    patch_dir.mkdir(parents=True, exist_ok=True)
-    patched_path = patch_dir / "download_eggnog_data_patched.py"
-    try:
-        patched_path.write_text(patched, encoding="utf-8")
-    except OSError:
+        from eggnogmapper.version import __DB_VERSION__
+    except Exception as exc:
         if logger:
-            logger.warning("Failed to write patched eggNOG downloader; using original.")
-        return downloader
+            logger.error("eggNOG-mapper is required for setup: %s", exc)
+        raise typer.Exit(1)
+    if not __DB_VERSION__:
+        if logger:
+            logger.error("eggNOG-mapper did not report a database version.")
+        raise typer.Exit(1)
+    return __DB_VERSION__
+
+
+def _select_download_tool() -> Tuple[str, str]:
+    for tool in ("aria2c", "wget", "curl"):
+        path = shutil.which(tool)
+        if path:
+            return tool, path
+    raise FileNotFoundError("No download tool found (aria2c, wget, or curl).")
+
+
+def _run_download_cmd(
+    cmd: List[str],
+    logger: Optional[logging.Logger] = None,
+    verbose: bool = True,
+    description: str = "Command",
+) -> None:
+    if logger:
+        logger.info("%s: %s", description, " ".join(shlex.quote(arg) for arg in cmd))
+    try:
+        if verbose:
+            subprocess.run(cmd, check=True)
+        else:
+            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+    except subprocess.CalledProcessError as exc:
+        if logger:
+            logger.error("Download command failed with exit code %s.", exc.returncode)
+        raise typer.Exit(exc.returncode)
+
+
+def _download_file(
+    url: str,
+    dest: Path,
+    logger: Optional[logging.Logger] = None,
+    verbose: bool = True,
+) -> None:
+    try:
+        tool, tool_path = _select_download_tool()
+    except FileNotFoundError as exc:
+        if logger:
+            logger.error("%s", exc)
+        raise typer.Exit(1)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    if tool == "aria2c":
+        cmd = [
+            tool_path,
+            "--console-log-level=warn",
+            "--dir",
+            str(dest.parent),
+            "--out",
+            dest.name,
+            "--allow-overwrite=true",
+            "--auto-file-renaming=false",
+            "--continue=true",
+            "--file-allocation=none",
+            "--max-tries=0",
+            "--retry-wait=30",
+            "--timeout=60",
+            "--summary-interval=60",
+            "-x",
+            "8",
+            "-s",
+            "8",
+            "-k",
+            "1M",
+            url,
+        ]
+        if not verbose:
+            cmd.insert(1, "--quiet")
+    elif tool == "wget":
+        cmd = [
+            tool_path,
+            "--continue",
+            "--tries=0",
+            "--retry-connrefused",
+            "--waitretry=30",
+            "--read-timeout=30",
+            "--timeout=30",
+            "--progress=dot:giga",
+            "-O",
+            str(dest),
+            url,
+        ]
+        if not verbose:
+            cmd.insert(1, "--quiet")
+    else:
+        cmd = [
+            tool_path,
+            "--location",
+            "--continue-at",
+            "-",
+            "--retry",
+            "9999",
+            "--retry-delay",
+            "30",
+            "--retry-all-errors",
+            "--connect-timeout",
+            "30",
+            "--max-time",
+            "0",
+            "-o",
+            str(dest),
+            url,
+        ]
+        if not verbose:
+            cmd.insert(1, "--silent")
+            cmd.insert(2, "--show-error")
+
+    _run_download_cmd(cmd, logger=logger, verbose=verbose, description="Download command")
+
+
+def _extract_archive(
+    archive_path: Path,
+    target_dir: Path,
+    mode: str,
+    logger: Optional[logging.Logger] = None,
+    verbose: bool = True,
+) -> None:
+    if mode == "gunzip":
+        cmd = ["gunzip", "-f", str(archive_path)]
+        _run_download_cmd(cmd, logger=logger, verbose=verbose, description="Decompression command")
+        return
+
+    if mode == "tar":
+        cmd = ["tar", "-zxf", str(archive_path), "-C", str(target_dir)]
+        _run_download_cmd(cmd, logger=logger, verbose=verbose, description="Extraction command")
+        try:
+            archive_path.unlink()
+        except OSError:
+            if logger:
+                logger.warning("Could not remove archive %s after extraction.", archive_path)
+        return
 
     if logger:
-        logger.info("Patched eggNOG downloader to use eggnog5.embl.de.")
-    return str(patched_path)
+        logger.error("Unknown archive extraction mode: %s", mode)
+    raise typer.Exit(1)
+
+
+def _download_eggnog_core_data(
+    target_dir: Path,
+    force: bool,
+    yes: bool,
+    logger: Optional[logging.Logger] = None,
+    verbose: bool = True,
+) -> None:
+    db_version = _get_eggnog_db_version(logger)
+    base_url = f"http://eggnog5.embl.de/download/emapperdb-{db_version}"
+    downloads = [
+        ("eggnog.db.gz", "eggnog.db", "gunzip"),
+        ("eggnog.taxa.tar.gz", "eggnog.taxa.db", "tar"),
+        ("eggnog_proteins.dmnd.gz", "eggnog_proteins.dmnd", "gunzip"),
+    ]
+
+    for archive_name, output_name, mode in downloads:
+        archive_path = target_dir / archive_name
+        output_path = target_dir / output_name
+
+        if force:
+            for path in (archive_path, output_path):
+                if path.exists():
+                    try:
+                        path.unlink()
+                    except OSError:
+                        if logger:
+                            logger.warning("Failed to remove %s before re-download.", path)
+
+        if output_path.exists():
+            if logger:
+                logger.info("eggNOG data file already present: %s", output_path)
+            continue
+
+        if not yes:
+            prompt = f"Download {archive_name} to {target_dir}?"
+            if not typer.confirm(prompt):
+                if logger:
+                    logger.warning("Skipped download of %s by user choice.", archive_name)
+                continue
+
+        url = f"{base_url}/{archive_name}"
+        if not archive_path.exists():
+            if logger:
+                logger.info("Downloading %s from %s", archive_name, url)
+            _download_file(url, archive_path, logger=logger, verbose=verbose)
+
+        _extract_archive(archive_path, target_dir, mode, logger=logger, verbose=verbose)
+
+        if not output_path.exists():
+            if logger:
+                logger.error("Expected eggNOG file missing after extraction: %s", output_path)
+            raise typer.Exit(1)
 
 def run_subprocess_with_logging(
     cmd: List[str],
@@ -3905,7 +4037,7 @@ def setup(
         help="Stream downloader output to the console.",
     ),
 ) -> None:
-    """Download eggNOG-mapper data (via download_eggnog_data.py) and persist the location for future runs."""
+    """Download eggNOG-mapper core data and persist the location for future runs."""
     target_dir = Path(eggnog_data_dir).expanduser().resolve() if eggnog_data_dir else default_eggnog_data_dir()
     target_dir = target_dir.expanduser().resolve()
 
@@ -3921,30 +4053,8 @@ def setup(
     if _has_eggnog_core_files(target_dir) and not force:
         logger.info("eggNOG data already present; skipping download.")
     else:
-        downloader = _find_eggnog_downloader()
-        if downloader is None:
-            message = (
-                "download_eggnog_data.py not found in PATH or the env's python-scripts directory. "
-                "Ensure eggnog-mapper is installed."
-            )
-            emit_error(message, logger)
-            raise typer.Exit(1)
-        downloader = _patch_eggnog_downloader(downloader, log_dir, logger)
-
-        cmd = [sys.executable, downloader, "--data_dir", str(target_dir)]
-        if yes:
-            cmd.append("-y")
-        if force:
-            cmd.append("-f")
-        if not verbose:
-            cmd.append("-q")
-
-        logger.info("Running eggNOG-mapper downloader: %s", " ".join(shlex.quote(arg) for arg in cmd))
-        try:
-            subprocess.run(cmd, check=True)
-        except subprocess.CalledProcessError as exc:
-            emit_error(f"eggNOG-mapper downloader failed with exit code {exc.returncode}", logger)
-            raise typer.Exit(exc.returncode)
+        logger.info("Downloading eggNOG-mapper core databases.")
+        _download_eggnog_core_data(target_dir, force, yes, logger=logger, verbose=verbose)
 
     if not _has_eggnog_core_files(target_dir):
         emit_error(

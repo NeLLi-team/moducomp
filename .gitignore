@@ -2,6 +2,7 @@ output*
 test_parallel*
 test_ko_matrix.csv
 __pycache__
+logs/
 
 
 # Byte-compiled / optimized / DLL files

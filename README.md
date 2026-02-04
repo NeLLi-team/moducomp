@@ -35,7 +35,7 @@ pixi global install \
 
 ## Setup data (required)
 
-`moducomp` needs the eggNOG-mapper database to run. Use `moducomp setup` to download the data with eggNOG-mapper's official downloader and record the location for future runs. For upstream details, see the eggNOG-mapper setup guide: [eggNOG-mapper database setup](https://github.com/eggnogdb/eggnog-mapper/wiki/eggNOG-mapper-v2.1.5-to-v2.1.13#user-content-Setup).
+`moducomp` needs the eggNOG-mapper database to run. Use `moducomp setup` to download the data using ModuComp's built-in downloader (with resume/retry) and record the location for future runs. For upstream details, see the eggNOG-mapper setup guide: [eggNOG-mapper database setup](https://github.com/eggnogdb/eggnog-mapper/wiki/eggNOG-mapper-v2.1.5-to-v2.1.13#user-content-Setup).
 
 ```bash
 moducomp setup
@@ -360,3 +360,9 @@ Genome identifiers are stored as `taxon_oid`. In pipeline mode, ModuComp expects
 
 ## Citation
 Villada, JC. & Schulz, F. (2025). Assessment of metabolic module completeness of genomes and metabolic complementarity in microbiomes with `moducomp` . `moducomp` (v0.5.1) Zenodo. https://doi.org/10.5281/zenodo.16116092
+
+## Tool Citations
+If you use ModuComp in a study, please also cite the wrapped tools and data sources:
+
+- eggNOG-mapper: Cantalapiedra CP et al. (2021). “eggNOG-mapper v2: Functional Annotation, Orthology Assignments, and Domain Prediction at the Metagenomic Scale.” Molecular Biology and Evolution. DOI: 10.1093/molbev/msab293. GitHub: https://github.com/eggnogdb/eggnog-mapper
+- KEGG Pathways Completeness Tool (KPCT): GitHub: https://github.com/EBI-Metagenomics/kegg-pathways-completeness-tool. KEGG source: Kanehisa M, Goto S. (2000). “KEGG: Kyoto Encyclopedia of Genes and Genomes.” Nucleic Acids Research. DOI: 10.1093/nar/28.1.27
