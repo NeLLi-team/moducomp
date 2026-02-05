@@ -1,5 +1,5 @@
 context:
-  version: 0.7.36
+  version: 0.7.37
 
 package:
   name: moducomp
@@ -7,7 +7,7 @@ package:
 
 source:
 - url: https://pypi.org/packages/source/m/moducomp/moducomp-${{ version }}.tar.gz
-  sha256: 4096d4217adcc4d1e7797399246df8b6244cbfd482819b0b1fca72c0de7d403a
+  sha256: dc3f19df2d0227097027c7c965dfe60da4666600872a1903638a61c919e3072e
 
 build:
   script:
