@@ -1,13 +1,13 @@
 context:
-  version: 0.7.44
+  version: 0.7.45
 
 package:
   name: moducomp
   version: ${{ version }}
 
 source:
-- url: https://files.pythonhosted.org/packages/0c/b1/4fe5061e2b7bb192125f4144bf6bf809a70975d645d6ed6782a67d70e9fe/moducomp-0.7.44.tar.gz
-  sha256: c074dfbd1aba49b3f37cc27edef486a93cb10e3d101034e6083c101e4b479e69
+- url: https://files.pythonhosted.org/packages/94/fc/5dae7a31f039be08902c438c097b08e178340c8ce7100596881aafa34fa3/moducomp-0.7.45.tar.gz
+  sha256: acbdf9dbae77523e8cff579f5c33fad19cdb8ca768bdaee2a464e16d28e135fb
 
 build:
   script:
